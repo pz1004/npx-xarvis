@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 from torch import Tensor
 from torchaudio.datasets import SPEECHCOMMANDS
 
-class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
+class NpxSpeechCommandsPreprocess(SPEECHCOMMANDS):
     """
     Multi-class Keyword Spotting dataset on Google Speech Commands.
 
@@ -39,7 +39,6 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
       target_words: list of target words to detect as separate classes
       transform: callable (waveform -> feature). Accepts (n,) or (1,n). Must return (T,M) or (1,T,M).
       target_sr: target sample rate (Hz)
-      num_samples: fixed waveform length (samples) after resampling
       download: download dataset if missing
       cache_dir: directory path to cache preprocessed tensors (optional)
       verbose: print progress info
@@ -56,8 +55,6 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
         target_words: List[str] = ['happy'],
         transform=None,
         target_sr: int = 16000,
-        #num_samples: int = 16000,
-        num_samples: int = 0,
         download: bool = True,
         cache_dir: Optional[str] = None,
         verbose: bool = True,
@@ -73,7 +70,6 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
         # Basic config
         self.transform = transform
         self.target_sr = target_sr
-        self.num_samples = num_samples
         self.cache_dir = cache_dir
         self.verbose = verbose
         self.target_words = [w.lower() for w in target_words]
@@ -83,7 +79,7 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
         self.rng = random.Random(seed)
 
         # Parent length and lazy resampler
-        self._raw_len = super(SpeechCommandsKWSMulti, self).__len__()
+        self._raw_len = super(NpxSpeechCommandsPreprocess, self).__len__()
         self._resampler = None
 
         # Create cache directory if needed
@@ -93,7 +89,7 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
         # --- Step 1: Build label -> indices mapping (metadata only) ---
         label_to_indices: Dict[str, List[int]] = defaultdict(list)
         for i in range(self._raw_len):
-            _, _, label, *_ = super(SpeechCommandsKWSMulti, self).__getitem__(i)
+            _, _, label, *_ = super(NpxSpeechCommandsPreprocess, self).__getitem__(i)
             label_to_indices[label].append(i)
 
         # Warn if some target words are missing
@@ -190,31 +186,33 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
                 cache_path = os.path.join(self.cache_dir, f"{i:07d}.pt")
                 if os.path.exists(cache_path):
                     obj = torch.load(cache_path)
-                    self.data.append(obj["x"])
-                    self.targets.append(int(obj["y"]))
+                    self.data.append(obj["feature"])
+                    self.targets.append(int(obj["label"]))
                     continue
 
             if typ in ("target", "unknown"):
-                waveform, sr, label, *_ = super(SpeechCommandsKWSMulti, self).__getitem__(src)
-                x = self._prepare_feature_from_waveform(waveform, sr)
+                waveform, sr, label, *_ = super(NpxSpeechCommandsPreprocess, self).__getitem__(src)
+                assert sr == self.target_sr
+                feature = self._prepare_feature_from_waveform(waveform)
                 lcl = label.lower()
                 if lcl in self.target_words:
                     # Each target word has its own class index
-                    y = self.CLASS_MAP[lcl]
+                    label = self.CLASS_MAP[lcl]
                 else:
-                    y = self.CLASS_MAP["unknown"]
+                    label = self.CLASS_MAP["unknown"]
             elif typ == "silence":
-                wav = self._sample_silence_waveform(self._bg_noises_cache, self.num_samples, self.target_sr)
-                x = self._prepare_feature_from_waveform(wav, self.target_sr)
-                y = self.CLASS_MAP["silence"]
+                num_samples=32000
+                waveform = self._sample_silence_waveform(self._bg_noises_cache, num_samples)
+                feature = self._prepare_feature_from_waveform(waveform)
+                label = self.CLASS_MAP["silence"]
             else:
                 raise RuntimeError("Invalid item type")
 
-            self.data.append(x)
-            self.targets.append(int(y))
+            self.data.append(feature)
+            self.targets.append(int(label))
 
             if self.cache_dir is not None:
-                torch.save({"x": x, "y": int(y)}, cache_path)
+                torch.save({"feature": feature, "": int(label)}, cache_path)
 
         # Try stacking (only if all shapes are consistent)
         try:
@@ -243,7 +241,7 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
     def __getitem__(self, index):
         if self.cache_dir is not None:
             obj = torch.load(os.path.join(self.cache_dir, f"{index:07d}.pt"))
-            return obj["x"], obj["y"]
+            return obj["feature"], obj["label"]
 
         if isinstance(self.data, torch.Tensor):
             return self.data[index], int(self.targets[index])
@@ -255,7 +253,7 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
             return len(self.targets)
         if hasattr(self, "_raw_len"):
             return self._raw_len
-        return super(SpeechCommandsKWSMulti, self).__len__()
+        return super(NpxSpeechCommandsPreprocess, self).__len__()
 
     def num_classes(self) -> int:
         """Return number of classes = len(target_words) + 2 (unknown + silence)."""
@@ -275,21 +273,13 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
     # ---------------------------
     # Internal utilities
     # ---------------------------
-    def _prepare_feature_from_waveform(self, waveform: torch.Tensor, sr: int) -> torch.Tensor:
+    def _prepare_feature_from_waveform(self, waveform: torch.Tensor) -> torch.Tensor:
         """
         Resample -> Pad/Trim -> Transform.
         Output shape:
           - If transform returns (T, M), expand to (1, T, M)
           - Otherwise keep raw waveform as (1, 1, L)
         """
-        if sr != self.target_sr:
-            if self._resampler is None:
-                self._resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.target_sr)
-            waveform = self._resampler(waveform)
-
-        if self.num_samples > 0:
-          waveform = self._pad_or_trim(waveform, self.num_samples)
-
         if self.transform is not None:
             feat = self.transform(waveform.squeeze(0))
             if feat.dim() == 2:
@@ -298,17 +288,6 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
             feat = waveform.unsqueeze(0)  # (1, 1, L)
 
         return feat
-
-    @staticmethod
-    def _pad_or_trim(waveform: torch.Tensor, num_samples: int) -> torch.Tensor:
-        """Pad with zeros or trim to a fixed number of samples."""
-        n = waveform.size(1)
-        if n < num_samples:
-            pad = num_samples - n
-            waveform = torch.nn.functional.pad(waveform, (0, pad))
-        else:
-            waveform = waveform[:, :num_samples]
-        return waveform
 
     def _sample_unknown_diverse(self, pool_by_label: Dict[str, List[int]], desired: int, rng: random.Random) -> List[int]:
         """
@@ -364,14 +343,11 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
                     continue
                 p = os.path.join(bg_dir, fn)
                 wav, sr = torchaudio.load(p)  # (C, N)
+                assert sr == self.target_sr
                 if wav.dim() == 2 and wav.size(0) > 1:
                     wav = wav.mean(dim=0, keepdim=True)  # convert to mono
                 elif wav.dim() == 1:
                     wav = wav.unsqueeze(0)
-                if sr != self.target_sr:
-                    if self._resampler is None:
-                        self._resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.target_sr)
-                    wav = self._resampler(wav)
                 noises.append(wav)
 
         if self.verbose:
@@ -381,14 +357,11 @@ class SpeechCommandsKWSMulti(SPEECHCOMMANDS):
             )
         return noises
 
-    def _sample_silence_waveform(self, bg_noises: List[torch.Tensor], num_samples: int, sr: int) -> torch.Tensor:
+    def _sample_silence_waveform(self, bg_noises: List[torch.Tensor], num_samples: int) -> torch.Tensor:
         """
         Create a 'silence' segment by randomly cropping a background noise file.
         If none available, return zero-silence of length num_samples.
         """
-        if num_samples <= 0:
-          num_samples = 32000
-
         if bg_noises:
             wav = bg_noises[self.rng.randrange(len(bg_noises))]
             N = wav.size(1)

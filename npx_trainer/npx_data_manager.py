@@ -172,11 +172,11 @@ class NpxDataManager():
               hop_length=self.hop_length,
               n_mels=self.n_mels
         )
-      train_dataset = SpeechCommandsKWSMulti(root=self.download_path, subset='training', transform=self.transform, target_sr=self.sample_rate)
-      val_dataset   = SpeechCommandsKWSMulti(root=self.download_path, subset='validation', transform=self.transform, target_sr=self.sample_rate)
+      train_dataset = NpxSpeechCommandsPreprocess(root=self.download_path, subset='training', transform=self.transform, target_sr=self.sample_rate)
+      val_dataset   = NpxSpeechCommandsPreprocess(root=self.download_path, subset='validation', transform=self.transform, target_sr=self.sample_rate)
       dataset_train_and_val = train_dataset + val_dataset
-      self.dataset_test = SpeechCommandsKWSMulti(root=self.download_path, subset='testing', transform=self.transform, target_sr=self.sample_rate)
-      self.dataset_test_raw = SpeechCommandsKWSMulti(root=self.download_path, subset='testing', transform=None, target_sr=self.sample_rate)
+      self.dataset_test = NpxSpeechCommandsPreprocess(root=self.download_path, subset='testing', transform=self.transform, target_sr=self.sample_rate)
+      self.dataset_test_raw = NpxSpeechCommandsPreprocess(root=self.download_path, subset='testing', transform=None, target_sr=self.sample_rate)
     else:
       print(f'Custom Dataset: {self.name}')
       assert self.download_path.is_dir(), f"Dataset does not exist in the path: {self.download_path}"
