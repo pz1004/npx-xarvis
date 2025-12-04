@@ -212,7 +212,7 @@ class NpxCfgParser():
     elif self.preprocess_info['input'] == 'dvsgesture_opendataset':
       scale = 1
       datatype = DataType(SignedType.UNSIGNED, NumberType.DISCR, 0, scale)
-    elif self.preprocess_info['input'].endswith('_opendataset'):
+    elif self.preprocess_info['input'].endswith('dataset'):
       if self.preprocess_info['step_generation'] == 'direct':
         scale = 1
         datatype = DataType(SignedType.UNSIGNED,

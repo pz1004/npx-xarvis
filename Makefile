@@ -1,6 +1,5 @@
-ifdef XARVIS_HOME
-	include ${XARVIS_HOME}/rvx_config.mh
-endif
+XARVIS_HOME=$(CURDIR)
+include ${XARVIS_HOME}/rvx_config.mh
 
 include ./rvx_init.mh
 
