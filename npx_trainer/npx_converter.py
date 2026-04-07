@@ -87,7 +87,6 @@ def write_parameter_to_binaryfile(npx_module:NpxModule, bin_path:Path):
         write_data_aligned_by_4bytes(bin_file, beta, torch.float32)
 
 def write_data_aligned_by_4bytes(file_io, data:torch.Tensor, data_type:torch.dtype):
-  assert(data.dtype==torch.float32)
   if data_type==torch.float32:
     with torch.no_grad():
       #data = [struct.unpack('!I', struct.pack('!f', val))[0] for val in data.numpy().reshape(-1)]
