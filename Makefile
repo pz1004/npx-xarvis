@@ -50,3 +50,20 @@ install_recent:
 	${PYTHON3_CMD} -m pip install --upgrade tqdm tonic
 	${PYTHON3_CMD} -m pip install --upgrade torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
 	${PYTHON3_CMD} -m pip install --upgrade snntorch
+
+install-paper:
+	${PYTHON3_CMD} -m pip install snntorch tonic pandas scikit-learn matplotlib seaborn psutil
+
+train-paper:
+	${PYTHON3_CMD} -m src.experiments.train_eval --dataset ${DATASET} --method ${METHOD} --seed ${SEED}
+
+tune-paper:
+	${PYTHON3_CMD} -m src.experiments.tune_filters --dataset ${DATASET} --method ${METHOD}
+
+aggregate-paper:
+	${PYTHON3_CMD} -m src.experiments.aggregate_results --regen-roc --roc-dataset ${DATASET}
+
+smoke-paper:
+	${PYTHON3_CMD} -m pytest tests
+	${PYTHON3_CMD} -m src.experiments.train_eval --dataset nmnist --method proposed_conf --seed 0 --epochs-override 1 --max-train-samples 64 --max-val-samples 32 --max-test-samples 32 --force-cpu
+	${PYTHON3_CMD} -m src.experiments.train_eval --dataset nmnist --method frame_snn --seed 0 --epochs-override 1 --max-train-samples 64 --max-val-samples 32 --max-test-samples 32 --force-cpu

@@ -1,0 +1,890 @@
+\documentclass[a4paper,fleqn]{cas-dc}
+
+\usepackage[authoryear,longnamesfirst]{natbib}
+
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{bm}
+
+%%%Author macros
+\def\tsc#1{\csdef{#1}{\textsc{\lowercase{#1}}\xspace}}
+\tsc{WGM}
+\tsc{QE}
+%%%
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+
+\newcommand{\ie}{\textit{i.e.}}
+\newcommand{\eg}{\textit{e.g.}}
+\newcommand{\etal}{\textit{et~al.}}
+\newcommand{\wrt}{w.r.t.}
+\newcommand{\ind}[1]{\mathbf{1}\!\left(#1\right)}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Fbar}{\bar{F}}
+
+\begin{document}
+\let\WriteBookmarks\relax
+\def\floatpagepagefraction{1}
+\def\textpagefraction{.001}
+
+\shorttitle{Event-Domain Denoising for Direct SNN Ingestion}
+
+\shortauthors{Jang et al.}
+
+\title [mode = title]{Event-Domain Denoising for Direct SNN Ingestion: A Theory-Grounded Architecture Without Frame Reconstruction}
+
+\tnotemark[1]
+\tnotetext[1]{This research was financially supported by the Ministry of Trade, Industry, and Energy (MOTIE), Korea, under the ``Global Industrial Technology Cooperation Center(GITCC) program'' supervised by the Korea Institute for Advancement of Technology (KIAT) (Task No. P0028420).}
+
+\author[1]{Sooyoung Jang}[orcid=0000-0002-6931-9592]
+\ead{syjang@hanbat.ac.kr}
+\credit{Conceptualization, Methodology, Software, Formal Analysis, Validation, Writing---original draft}
+
+\author[2]{Kyuseung Han}[orcid=0000-0002-9151-3447]
+\cormark[1]
+\ead{han@etri.re.kr}
+\credit{Conceptualization, Methodology, Validation, Writing---review \& editing}
+
+\affiliation[1]{organization={Department of Computer Engineering, Hanbat National University},
+    city={Daejeon},
+    postcode={34158},
+    country={Republic of Korea}}
+
+\affiliation[2]{organization={Electronics and Telecommunications Research Institute},
+    city={Daejeon},
+    postcode={34129},
+    country={Republic of Korea}}
+
+\cortext[1]{Corresponding authors.}
+
+\begin{abstract}
+Dynamic Vision Sensors (DVS) emit sparse asynchronous polarity events, yet many DVS-to-SNN pipelines still reconstruct dense frames or voxel grids before inference, undoing the sparsity and low-latency advantages that motivate the sensor in the first place. This paper develops a theoretically grounded, hardware-aware architecture that eliminates frame reconstruction by performing denoising entirely in the event domain. The central technical idea is a \emph{split-state semantics} that separates raw per-pixel history, used for same-pixel guards, from accepted support history, used for neighborhood consensus. This separation yields a polarity-conditioned support rule in which short-lag opposite-polarity events must clear a stricter threshold $K_0+\gamma$, making the opposite-polarity stage provably non-redundant rather than rhetorically motivated. On top of this structure we derive three analytical results. First, a self-consistent Poisson fixed-point bound on the background-activity (BA) false-accept rate yields the explicit design rule $M\lambda_n\Delta t\,(1-q_n)<1$ for self-quenching under a minimal support threshold. Second, a leading-order shot-noise rejection ratio $r(\gamma)\approx \mu_s^{\gamma}\,K_0!/(K_0+\gamma)!$ gives closed-form guidance for selecting the polarity penalty. Third, an expected-cost cascade-ordering criterion specialized to DVS per-event costs justifies the stage order analytically. We then present a six-stage event-native pipeline consisting of sensor-side bias shaping, same-pixel refractory and hot-pixel guarding with explicit recovery, accepted-neighbor support computation, polarity-conditioned thresholding, confidence-coded event emission, and dual-channel SNN ingestion. The architecture is mapped to balanced, ultra-low-memory, and ultra-low-latency hardware variants, analyzed for per-event throughput, and accompanied by a reproducible evaluation protocol that fixes datasets, compared methods, hyperparameters, and reporting conventions.
+\end{abstract}
+
+\begin{highlights}
+\item Split-state semantics separating raw per-pixel history from accepted support history make the polarity-conditioned denoising stage provably non-redundant.
+\item A self-consistent Poisson fixed-point bound with an explicit stability criterion $M\lambda_n\Delta t\,(1-q_n)<1$ and a leading-order shot-noise rejection ratio $r(\gamma)\approx \mu_s^{\gamma}\,K_0!/(K_0+\gamma)!$ provide actionable analytical guidance for parameter selection.
+\item A complete six-stage event-native pipeline with confidence-coded SNN ingestion eliminates frame reconstruction without sacrificing graded reliability information, and is mapped to balanced, low-memory, and low-latency hardware variants with an analytical throughput bound.
+\end{highlights}
+
+\begin{keywords}
+Dynamic Vision Sensor \sep event camera \sep spiking neural network \sep event-domain denoising \sep neuromorphic preprocessing \sep background activity noise
+\end{keywords}
+
+\maketitle
+
+%%% ============================================================
+\section{Introduction}
+\label{sec:introduction}
+
+A Dynamic Vision Sensor (DVS) is an asynchronous vision sensor in which each pixel independently monitors local log-intensity changes and emits an event when a contrast threshold is crossed~\citep{lichtsteiner2008128}. The output is a stream of events $e = (x, y, t, p)$, where $(x,y)$ is the pixel address, $t$ is the timestamp, and $p \in \{+1, -1\}$ denotes ON or OFF polarity. Compared with conventional frame cameras, DVS devices offer high dynamic range, microsecond-scale latency, and sparse output under static scenes~\citep{gallego2020survey}. These properties make them natural front ends for spiking neural networks (SNNs), which also operate on discrete time-localized spikes~\citep{eshraghian2023training}.
+
+Despite that alignment, the dominant pipeline still interposes a dense representation between the sensor and the network:
+\begin{equation}
+\begin{split}
+\text{event stream} &\to \text{frame / voxel grid} \\
+&\to \text{re-encoded spikes} \to \text{SNN}.
+\end{split}
+\label{eq:conventional}
+\end{equation}
+Frame or voxel reconstruction destroys event sparsity, injects accumulation latency, and reintroduces the memory-heavy dense tensors that event cameras were designed to eliminate~\citep{gehrig2024nature,ren2024spikepoint}. The question is therefore not merely whether event-domain denoising is possible, but whether it can be composed with direct SNN ingestion in a way that is both mathematically defensible and hardware-realizable.
+
+Each building block already exists in the literature. Sensor-side bias shaping suppresses noise at the source~\citep{delbruck2021feedback,mcreynolds2023lowlight}. Spatiotemporal correlation filters exploit the neighborhood support that genuine signal events possess and that background activity (BA) noise lacks~\citep{delbruck2008ba,khodamoradi2018onoise,zhao2024pclf}. Low-light studies reveal that same-pixel shot-noise events appear predominantly as short-lag opposite-polarity pairs~\citep{mcreynolds2023lowlight}. Event-native SNN front ends demonstrate that frame reconstruction is not a prerequisite for inference~\citep{orchard2015hfirst,bonazzi2024retina}. However, no prior work composes these ingredients into a single pipeline whose internal state semantics are formally specified.
+
+The missing piece is more than an engineering detail. In a multi-stage denoiser, the timestamp used for neighborhood support and the timestamp used for same-pixel refractory logic serve different roles. If both are drawn from the same state, the raw last-event time and the last \emph{accepted} support time collapse into a single variable. A polarity-conditioned stage then becomes logically redundant: under the default support threshold $K_0 \geq 1$, an event that already fails the support test cannot benefit from an additional polarity veto. This manuscript resolves that ambiguity by introducing \emph{split-state semantics}---separate raw and accepted history maps---and derives three analytical results that justify the architecture from first principles.
+
+\subsection{Contributions}
+\label{sec:contributions}
+
+The paper makes three contributions.
+
+\begin{enumerate}
+\item \textbf{Theory-grounded problem formulation.} We model the observed event stream as the superposition of correlated signal events, approximately spatially independent BA noise, and same-pixel alternating-polarity shot-noise pairs. From this model we derive (i)~a self-consistent Poisson fixed-point bound on the BA false-accept probability with an explicit stability criterion $M\lambda_n\Delta t\,(1-q_n)<1$ that is computable from the raw noise rate alone (Proposition~\ref{prop:ba} and Corollary~\ref{cor:fixed_point}), (ii)~a leading-order shot-noise rejection ratio $r(\gamma)\approx \mu_s^{\gamma}\,K_0!/(K_0+\gamma)!$ showing that each unit of polarity penalty~$\gamma$ suppresses acceptance by a multiplicative factor of $\mu_s/(K_0+\gamma)$ in the weak-support regime (Proposition~\ref{prop:shot}), and (iii)~an expected-cost stage-ordering criterion that specializes the classical cascade principle~\citep{viola2001rapid} to DVS per-event costs (Proposition~\ref{prop:ordering}).
+
+\item \textbf{Split-state, polarity-conditioned filter logic.} We separate raw per-pixel history from accepted support history:
+\[
+\mathcal{M}^{\text{raw}}[x,y] \neq \mathcal{M}^{\text{acc}}[x,y].
+\]
+The resulting acceptance rule uses a polarity-conditioned support threshold $K_0 + \gamma Q_i$, making Stage~4 non-redundant even in the default regime $K_0 \geq 1$. A dedicated analysis shows that the same polarity penalty is asymmetrically harder on shot noise than on signal events under Assumptions~A1 and~A3.
+
+\item \textbf{Hardware-aware architecture, throughput analysis, and evaluation protocol.} We present a complete six-stage event-native pipeline with confidence-coded SNN ingestion, map the same logical design to balanced, ultra-low-memory, and ultra-low-latency hardware variants, provide an analytical per-event throughput estimate, and specify a reproducible two-level evaluation protocol that follow-up empirical work can adopt verbatim.
+\end{enumerate}
+
+The remainder of the paper is organized as follows. Section~\ref{sec:related} surveys the most relevant prior work. Section~\ref{sec:problem} formulates the problem and derives the analytical results. Section~\ref{sec:architecture} presents the six-stage architecture. Section~\ref{sec:variants} discusses implementation variants. Section~\ref{sec:evaluation} specifies the evaluation protocol. Section~\ref{sec:discussion} discusses scope and limitations. Section~\ref{sec:conclusion} concludes.
+
+%%% ============================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Noise Physics and Sensor-Side Control}
+\label{sec:related_noise}
+
+DVS noise is not monolithic; its components require distinct countermeasures. Background activity (BA) noise is typically modeled as spatially uncorrelated, temporally random activity arising from thermal noise, leakage, and circuit mismatch~\citep{gallego2020survey,khodamoradi2018onoise,feng2020density}. Under low illumination, shot noise becomes dominant and exhibits a qualitatively different structure: \citet{mcreynolds2023lowlight} show that more than 90\% of sequential shot-noise pairs at a single pixel are opposite in polarity and separated by a short inter-event interval. Hot pixels produce persistent, anomalously high event rates regardless of scene content~\citep{li2024denoising_spatiotemp}. Flicker from artificial lighting introduces periodic global activity~\citep{wang2022comb,wu2025pfd}. The coexistence of these mechanisms means that a single-criterion filter will inevitably leave at least one noise type unaddressed.
+
+Sensor-side bias control is the cheapest place to suppress noise. DVS event statistics depend on bias parameters such as contrast threshold, photoreceptor bandwidth, and refractory period~\citep{delbruck2021feedback}. Feedback bias control and deliberate ON/OFF threshold asymmetry can substantially reduce low-light noise before any digital filtering is applied~\citep{delbruck2021feedback,mcreynolds2023lowlight}. SciDVS pushes this idea further by integrating pixel-level bandwidth control and spatial binning into the sensor design itself~\citep{graca2024scidvs,graca2023optimal}. These sensor-side techniques form Stage~1 of the architecture proposed in Section~\ref{sec:architecture}.
+
+\subsection{Event-Domain Denoising}
+\label{sec:related_denoising}
+
+The dominant family of event-domain denoisers exploits local spatiotemporal support: an event is accepted if at least one neighbor has recently fired. Delbruck's BA filter introduced this principle~\citep{delbruck2008ba}; Khodamoradi and Kastner formalized it as a spatiotemporal correlation filter (STCF) with an $O(m{+}n)$ row/column memory organization that drastically reduces storage cost~\citep{khodamoradi2018onoise}. Subsequent extensions incorporate event-density heuristics~\citep{feng2020density}, joint rate-and-time-series analysis for hot-pixel suppression~\citep{li2024denoising_spatiotemp}, and polarity-consistency checks for simultaneous BA and flicker rejection~\citep{wu2025pfd}.
+
+A parallel line of work uses learned models. \citet{baldwin2020epm} train a convolutional network (EDnCNN) to classify events as signal or noise; \citet{benmiled2024adaptive} propose an adaptive unsupervised spatiotemporal filter; and \citet{riosnavarro2023mlpf} deploy a lightweight MLP denoiser inside camera-adjacent digital logic. These methods can outperform hand-crafted rules when labeled data is available, but they introduce training dependencies and model-size constraints that complicate hardware deployment.
+
+On the hardware side, \citet{liu2019mixed} implement mixed-signal correlation filtering at very low power, \citet{zhao2024pclf} use a cache-like FPGA structure for joint denoising and compression, and \citet{gopalakrishnan2023hash} propose a hash-based data structure that reduces memory further. Evaluation methodology has also matured: \citet{guo2022low} introduce a systematic low-cost denoising benchmark, and the E-MLB framework~\citep{ding2024emlb} provides multilevel event-domain comparison protocols.
+
+All of these filters address a single noise type or a single design axis (accuracy, memory, latency, learnability). None of them formalizes the \emph{state semantics} that connect their internal bookkeeping to the downstream consumer of the filtered stream. The present work fills that gap by specifying separate raw and accepted state maps, deriving analytical guarantees from the resulting filter rule, and composing the denoiser with a confidence-coded SNN front end. Our stage-ordering analysis draws on the classical cascade principle that cheap tests should precede expensive ones, as formalized for multi-stage detectors by \citet{viola2001rapid} and anticipated in the group-testing literature~\citep{dorfman1943detection}.
+
+\subsection{Direct Event-to-SNN Pipelines}
+\label{sec:related_snn}
+
+Direct event ingestion by SNNs is already feasible. HFirst processes event streams with coincidence-based hierarchical spiking layers without reconstructing frames~\citep{orchard2015hfirst}. Retina feeds sparse event packets into low-power spiking hardware for eye tracking~\citep{bonazzi2024retina}. SpikePoint and SpikeSlicer push event-native representations further for downstream learning~\citep{ren2024spikepoint,spikeslicer2024}. These works establish that frame reconstruction is unnecessary for SNN inference, but they treat the event stream as given---none of them specifies how upstream denoising should interact with the network's input interface, what state semantics the denoiser should maintain, or how graded confidence information should be propagated into the spiking front end. The present manuscript addresses exactly that composition: it treats direct SNN ingestion not as an isolated result but as the terminal stage of a denoising architecture whose internal logic is made explicit.
+
+%%% ============================================================
+\section{Problem Formulation and Analytical Results}
+\label{sec:problem}
+
+\subsection{Observed Event Stream Model}
+\label{sec:problem_model}
+
+Let the observed event stream be
+\begin{equation}
+\mathcal{E} = \mathcal{E}_{\text{sig}} \uplus \mathcal{E}_{\text{BA}} \uplus \mathcal{E}_{\text{shot}},
+\label{eq:stream_superposition}
+\end{equation}
+where $\uplus$ denotes superposition of point processes.
+
+We adopt three modeling assumptions.
+
+\textbf{A1: Signal events are locally correlated.}
+Events generated by true scene motion tend to appear in short spatiotemporal clusters and exhibit local polarity coherence along moving edges.
+
+\textbf{A2: BA noise is approximately spatially independent.}
+At the scale of the support neighborhood, BA events can be approximated as independent Poisson activity with per-pixel rate $\lambda_n$~\citep{khodamoradi2018onoise,feng2020density}.
+
+\textbf{A3: Low-light shot noise produces alternating same-pixel pairs.}
+For a substantial fraction of low-light shot-noise events, the next same-pixel event is opposite in polarity and arrives within a short lag $\tau_{\text{pair}}$~\citep{mcreynolds2023lowlight}.
+
+Let $M = |\mathcal{N}(x_i,y_i)\setminus \{(x_i,y_i)\}|$ be the number of neighbors used by the support filter, and let $\Delta t$ be the support window. The architecture below will compute support only from \emph{accepted} same-polarity history, not from raw history.
+
+For analysis, we also introduce two binary quantities based on raw same-pixel history. Let $G_i$ denote survival of the same-pixel guard, and let $Q_i$ denote the short-lag opposite-polarity flag that is set when the current event flips polarity relative to the previous raw event at the same pixel within the window $\tau_{\text{pair}}$. We also use $T_{u,v}^{\text{acc},p_i}$ as shorthand for the most recent \emph{accepted} neighbor timestamp at pixel $(u,v)$ with the same polarity as the current event. These quantities will later become the formal Stage~2 and Stage~4 indicators.
+
+\subsection{Analytical Results}
+\label{sec:problem_results}
+
+\begin{proposition}[Self-consistent BA false-accept bound]
+\label{prop:ba}
+Assume that accepted BA events at each neighbor pixel form approximately independent Poisson processes with effective rate $\lambda_{\emph{acc},n}$. Then the same-polarity support count
+\[
+S_i = \sum_{(u,v)\in\mathcal{N}(x_i,y_i)\setminus\{(x_i,y_i)\}}
+\ind{0 < t_i - T_{u,v}^{\emph{acc},p_i} < \Delta t}
+\]
+is approximately Poisson with mean $\mu = M \lambda_{\emph{acc},n}\Delta t$.
+Let $q_n = \Prob(Q_i = 1 \mid e_i \in \mathcal{E}_{\emph{BA}},\, G_i = 1)$ denote the probability that a BA event reaches Stage~4 with the pair flag set, and write $\Fbar_{\mathrm{Poi}}(k;\mu) = \Prob(\mathrm{Poisson}(\mu)\geq k)$ for the Poisson survival function. Then
+\begin{equation}
+\begin{aligned}
+P_{\emph{FA,BA}}
+&\approx (1-q_n)\,\Fbar_{\mathrm{Poi}}(K_0;\,\mu) + q_n\,\Fbar_{\mathrm{Poi}}(K_0+\gamma;\,\mu).
+\end{aligned}
+\label{eq:prop_ba}
+\end{equation}
+Because BA events accepted by the filter become the source of accepted BA activity at neighbor pixels, the effective rate satisfies $\lambda_{\emph{acc},n}\approx P_{\emph{FA,BA}}\,\lambda_n$, yielding the self-consistency equation
+\begin{equation}
+P_{\emph{FA,BA}} = f(P_{\emph{FA,BA}}),
+\label{eq:fixed_point}
+\end{equation}
+where
+\begin{equation}
+\begin{split}
+f(p) &\triangleq (1{-}q_n)\,\Fbar_{\mathrm{Poi}}\!\bigl(K_0;\,M p\lambda_n\Delta t\bigr) \\
+&\quad + q_n\,\Fbar_{\mathrm{Poi}}\!\bigl(K_0{+}\gamma;\,M p\lambda_n\Delta t\bigr).
+\end{split}
+\label{eq:f_def}
+\end{equation}
+\end{proposition}
+
+\noindent\textit{Proof sketch.}
+Under Assumption~A2, accepted BA events in distinct neighbor pixels are approximately independent after thinning by earlier stages. The count of accepted same-polarity arrivals in a fixed window is therefore approximated by a Poisson law with mean~$\mu$. Conditioning on~$Q_i$ only changes the threshold, giving~\eqref{eq:prop_ba}. Because the thinned rate at each neighbor pixel equals the raw rate times the acceptance probability of the same filter, we have $\lambda_{\text{acc},n}\approx P_{\text{FA,BA}}\lambda_n$, which closes the loop into~\eqref{eq:fixed_point}.
+
+\begin{corollary}[Stability of the self-quenching fixed point and computable upper bound]
+\label{cor:fixed_point}
+The map $f:[0,1]\to[0,1]$ defined in~\eqref{eq:f_def} satisfies $f(0)=0$ (because $\Fbar_{\mathrm{Poi}}(k;0)=0$ for $k\geq 1$), is continuous and monotonically increasing on $[0,1]$, and its slope at the origin is
+\begin{equation}
+f'(0) \;=\;
+\begin{cases}
+a\bigl[(1-q_n)+q_n\,\ind{\gamma=0}\bigr], & K_0=1,\\[3pt]
+0, & K_0\geq 2,
+\end{cases}
+\qquad a \triangleq M\lambda_n\Delta t.
+\label{eq:fprime}
+\end{equation}
+Consequently, the self-quenching fixed point $p^{*}=0$ is locally stable in either of the following regimes:
+\begin{itemize}
+\item $K_0\geq 2$, for every $a$ in the low-to-moderate-noise regime; or
+\item $K_0=1$ with $\gamma\geq 1$ and
+\begin{equation}
+M\lambda_n\Delta t\,(1-q_n)<1.
+\label{eq:stability}
+\end{equation}
+\end{itemize}
+In both regimes the first-iterate bound
+\begin{equation}
+\begin{split}
+P_{\emph{FA,BA}} \;\leq\; P_{\emph{FA,BA}}^{(0)} &\triangleq f(1) \\
+&= (1{-}q_n)\,\Fbar_{\mathrm{Poi}}(K_0;\,M\lambda_n\Delta t) \\
+&\quad + q_n\,\Fbar_{\mathrm{Poi}}(K_0{+}\gamma;\,M\lambda_n\Delta t)
+\end{split}
+\label{eq:upper_bound}
+\end{equation}
+holds and is computable from the raw noise rate $\lambda_n$ alone. Equation~\eqref{eq:stability} is therefore a concrete design rule: under minimal support $K_0{=}1$, the denoiser is self-quenching against BA noise whenever the product $M\lambda_n\Delta t$ is kept below $1/(1-q_n)$.
+\end{corollary}
+
+\noindent\textit{Proof sketch.}
+Monotonicity of $f$ follows from $\Fbar_{\text{Poi}}(k;\mu)$ being increasing in $\mu$. The derivative of the Poisson survival function is $\tfrac{d}{d\mu}\Fbar_{\text{Poi}}(k;\mu) = e^{-\mu}\mu^{k-1}/(k-1)!$, which at $\mu=0$ equals $1$ for $k=1$ and $0$ for $k\geq 2$. Applying the chain rule through $\mu=ap$ yields~\eqref{eq:fprime}. Since $f$ is monotone, any fixed point $p^{*}$ satisfies $p^{*}\leq f(1)$, giving~\eqref{eq:upper_bound}. For the $K_0{=}1$ case, the origin is locally stable iff the one-dimensional linearization satisfies $f'(0)<1$, i.e.\ $a(1-q_n)<1$ (when $\gamma\geq 1$).
+
+\begin{proposition}[Quantitative shot-noise rejection under polarity penalty]
+\label{prop:shot}
+Consider an event in $\mathcal{E}_{\text{shot}}$ that reaches Stage~4 with $Q_i = 1$. Let $\mu_s$ denote the expected same-polarity support count for such events. Under the Poisson approximation for $S_i$, the acceptance ratio between the penalized and unpenalized rules is
+\begin{equation}
+r(\gamma) \;\triangleq\; \frac{\Fbar_{\mathrm{Poi}}(K_0+\gamma;\,\mu_s)}{\Fbar_{\mathrm{Poi}}(K_0;\,\mu_s)}.
+\label{eq:shot_ratio}
+\end{equation}
+This ratio satisfies $r(0)=1$ and $r(\gamma)<1$ for every $\gamma\geq 1$ whenever $\Fbar_{\mathrm{Poi}}(K_0;\mu_s)>0$. In the regime $\mu_s\ll K_0$ that characterizes shot noise with weak spatial support, the leading-order Poisson-tail approximation $\Fbar_{\mathrm{Poi}}(k;\mu_s)\approx \mu_s^{k}/k!$ gives
+\begin{equation}
+r(\gamma) \;\approx\; \mu_s^{\,\gamma}\,\frac{K_0!}{(K_0+\gamma)!}
+\;=\; \frac{\mu_s^{\,\gamma}}{\prod_{j=1}^{\gamma}(K_0+j)}
+\;\xrightarrow{\gamma=1}\; \frac{\mu_s}{K_0+1},
+\label{eq:shot_approx}
+\end{equation}
+so that each additional unit of $\gamma$ multiplies shot-noise acceptance by a further factor of approximately $\mu_s/(K_0+\gamma+1)$ in the weak-support regime.
+\end{proposition}
+
+\noindent\textit{Proof sketch.}
+Because $K_0{+}\gamma > K_0$, the event $\{S_i\geq K_0{+}\gamma\}\subset\{S_i\geq K_0\}$ and $r(\gamma)\leq 1$. Strict inequality holds whenever $\Prob(K_0\leq S_i < K_0{+}\gamma)>0$. For the asymptotic regime $\mu_s\ll K_0$, the leading Poisson-tail term is $\Fbar_{\text{Poi}}(k;\mu_s)\approx \mu_s^{k}/k!$. Forming the ratio of the leading terms of numerator and denominator yields~\eqref{eq:shot_approx}. Concretely, with $K_0=1$, $\mu_s=0.3$, and $\gamma=1$, the leading-order estimate is $r(1)\approx \mu_s/(K_0+1)=0.15$; the exact value is $\Fbar_{\text{Poi}}(2;0.3)/\Fbar_{\text{Poi}}(1;0.3)\approx 0.143$. Either figure corresponds to approximately $85\%$ additional rejection of shot-noise events flagged by $Q_i{=}1$ relative to the unpenalized rule, which is substantially more aggressive than a naive $\mu_s/K_0$ estimate would suggest.
+
+\begin{proposition}[Expected-cost criterion for stage ordering]
+\label{prop:ordering}
+Let Stage~2 have per-event cost $c_2$ and rejection probability $\rho_2$, and let Stage~3 have per-event cost $c_3$ and rejection probability $\rho_3$ measured on events that reach it. Let Stage~4 have cost $c_4$. Then the expected processing cost for the order $2 \to 3 \to 4$ is
+\begin{equation}
+C_{2\to3\to4} = c_2 + (1-\rho_2)c_3 + (1-\rho_2)(1-\rho_3)c_4,
+\label{eq:c234}
+\end{equation}
+whereas swapping Stages~2 and~3 yields
+\begin{equation}
+C_{3\to2\to4} = c_3 + (1-\rho_3)c_2 + (1-\rho_3)(1-\rho_2)c_4.
+\label{eq:c324}
+\end{equation}
+Therefore
+\begin{equation}
+C_{3\to2\to4} - C_{2\to3\to4} = \rho_2 c_3 - \rho_3 c_2.
+\label{eq:ordering_diff}
+\end{equation}
+The order $2 \to 3 \to 4$ is preferable whenever $\rho_2/c_2 \geq \rho_3/c_3$.
+\end{proposition}
+
+\noindent\textit{Proof sketch.}
+The third-stage term is identical in both orders because it is paid only by events that survive the first two stages. Subtracting~\eqref{eq:c234} from~\eqref{eq:c324} gives~\eqref{eq:ordering_diff}. The criterion is the classical cascade-ordering rule~\citep{viola2001rapid,dorfman1943detection}; we include it here for self-containedness and to specialize it to the DVS context below.
+
+\textbf{DVS specialization.}
+For an $M$-neighbor support, Stage~2 requires $c_2=3$ operations (one timestamp read, two comparisons), while Stage~3 requires $c_3=2M$ operations ($M$ reads and $M$ comparisons; see Table~\ref{tab:complexity} for the $M=8$ case). The ordering preference therefore becomes $2M\,\rho_2 \geq 3\,\rho_3$. For a $3\times 3$ neighborhood this is $\rho_2 \geq 3\rho_3/16\approx 0.19\,\rho_3$. Because the refractory guard rejects all events arriving within $\tau_{\text{ref,dig}}$ of the previous raw event at the same pixel---which includes a substantial fraction of hot-pixel bursts and short-lag noise---$\rho_2$ is well above this threshold in all practical DVS noise regimes.
+
+Taken together, Propositions~\ref{prop:ba}--\ref{prop:ordering} and Corollary~\ref{cor:fixed_point} provide the paper's main theoretical support. In particular, Corollary~\ref{cor:fixed_point} gives both a computable upper bound on BA leakage from the raw noise rate alone and a closed-form stability criterion (Eq.~\ref{eq:stability}) that can be used for design, and Proposition~\ref{prop:shot} quantifies the marginal value of each unit of polarity penalty in closed form.
+
+%%% ============================================================
+\section{Proposed Architecture}
+\label{sec:architecture}
+
+\subsection{Design Principles}
+\label{sec:principles}
+
+The revised architecture is guided by three principles.
+
+\textbf{P1: Cheapest-noise-first ordering.}
+Noise that can be rejected with same-pixel state should be rejected before neighborhood state is read. This is the regime justified by Proposition~\ref{prop:ordering}.
+
+\textbf{P2: Split raw and accepted semantics.}
+Raw-event history answers the question ``what happened most recently at this pixel?'' Accepted-event history answers the question ``what trusted support is currently available in the neighborhood?'' Those are different questions and require different states.
+
+\textbf{P3: No frame reconstruction.}
+Every stage operates on asynchronous events and scalar per-pixel state. Dense frames, voxel grids, and time surfaces are not intermediate requirements of the pipeline.
+
+\subsection{Per-Pixel State and Update Semantics}
+\label{sec:state}
+
+The digital stages use two state maps:
+\begin{equation}
+\mathcal{M}^{\text{raw}}[x,y] =
+\Big(
+T_{x,y}^{\text{raw,last}},
+\; p_{x,y}^{\text{raw,last}},
+\; R_{x,y},
+\; U_{x,y},
+\; H_{x,y}
+\Big),
+\label{eq:state_raw}
+\end{equation}
+\begin{equation}
+\mathcal{M}^{\text{acc}}[x,y] =
+\Big(
+T_{x,y}^{\text{acc},+},
+\; T_{x,y}^{\text{acc},-}
+\Big).
+\label{eq:state_acc}
+\end{equation}
+Here $T^{\text{raw,last}}$ and $p^{\text{raw,last}}$ are the timestamp and polarity of the most recent \emph{raw} event at the pixel, regardless of whether it was accepted. $R_{x,y}$ is an exponentially weighted rate estimate, $U_{x,y}$ is the unsupported-event streak counter, and $H_{x,y}\in\{0,1\}$ is the hot-pixel flag. $T^{\text{acc},+}$ and $T^{\text{acc},-}$ store the latest \emph{accepted} ON and OFF timestamps, respectively.
+When the incoming event polarity is $p_i$, we use the shorthand $T_{u,v}^{\text{acc},p_i}$ to mean $T_{u,v}^{\text{acc},+}$ for $p_i=+1$ and $T_{u,v}^{\text{acc},-}$ for $p_i=-1$.
+
+The update semantics are explicit:
+\begin{itemize}
+\item $\mathcal{M}^{\text{raw}}$ is updated for every incoming event.
+\item $\mathcal{M}^{\text{acc}}$ is updated only when the event is accepted.
+\end{itemize}
+This separation is the core technical repair relative to the earlier manuscript.
+
+\textbf{Remark on cross-stage state coupling.}
+The hot-pixel flag $H_{x,y}$ is stored in $\mathcal{M}^{\text{raw}}$ and read during Stage~2's per-event guard. However, the flag is \emph{written} using the unsupported-streak counter $U_{x,y}$, which in turn depends on the support score $S_i$ computed by Stage~3. This creates a one-event-delayed feedback from Stage~3 to Stage~2: the guard applied to event $e_i$ reads a hot-pixel flag that was updated after processing event~$e_{i-1}$. The coupling does not violate the cheapest-first principle at the per-event level---the Stage~2 guard is still a constant-time local check---but it means that the hot-pixel detector is a cross-stage maintenance mechanism rather than a purely local computation. We make this dependency explicit in Algorithm~\ref{alg:pipeline}.
+
+\subsection{Pipeline Overview}
+\label{sec:pipeline}
+
+The complete event-native chain is
+\begin{equation}
+\boxed{
+\begin{aligned}
+&\text{\textbf{Conventional:}} \\
+&\quad \text{event} \to \text{frame/voxel} \\
+&\quad \to \text{re-spike} \to \text{SNN}, \\[1ex]
+&\text{\textbf{Proposed:}} \\
+&\quad \text{event} \xrightarrow{\text{S1}} \text{bias-shaped event} \\
+&\quad \xrightarrow{\text{S2}} \text{guarded event} \\
+&\quad \xrightarrow{\text{S3}} \text{support-scored event} \\
+&\quad \xrightarrow{\text{S4}} \text{thresholded event} \\
+&\quad \xrightarrow{\text{S5}} (x,y,t,p,c) \\
+&\quad \xrightarrow{\text{S6}} \text{SNN spike}.
+\end{aligned}
+}
+\label{eq:pipeline}
+\end{equation}
+
+Algorithm~\ref{alg:pipeline} gives the per-event logic for Stages~2--5. Stage~1 operates through sensor bias settings (Algorithm~\ref{alg:stage1}); Stage~6 is the downstream SNN.
+
+\begin{algorithm}[t]
+\caption{Per-event processing for Stages~2--5}
+\label{alg:pipeline}
+\begin{algorithmic}[1]
+\REQUIRE Event $e_i=(x_i,y_i,t_i,p_i)$; states $\mathcal{M}^{\text{raw}}$, $\mathcal{M}^{\text{acc}}$; parameters $\tau_{\text{ref,dig}}, \Delta t, K_0, \gamma, \tau_{\text{pair}}, K_{\text{high}}, \alpha, R_{\max}, U_{\text{hot}}, T_{\text{recover}}, \varepsilon$
+\ENSURE Acceptance $A_i\in\{0,1\}$; confidence $c_i\in\{0,1,2\}$
+\STATE $\Delta_i^{\text{raw}} \gets t_i - T_{x_i,y_i}^{\text{raw,last}}$
+\STATE $Q_i \gets \ind{p_i \neq p_{x_i,y_i}^{\text{raw,last}}}\cdot\ind{\Delta_i^{\text{raw}} < \tau_{\text{pair}}}$
+\STATE $R_{x_i,y_i} \gets \alpha/\max(\Delta_i^{\text{raw}}, \varepsilon) + (1-\alpha)\,R_{x_i,y_i}$
+\STATE \COMMENT{Hot-pixel recovery}
+\IF{$H_{x_i,y_i}=1$ \textbf{and} $\Delta_i^{\text{raw}} \geq T_{\text{recover}}$}
+    \STATE $H_{x_i,y_i} \gets 0$;\quad $U_{x_i,y_i} \gets 0$;\quad $R_{x_i,y_i} \gets 0$
+\ENDIF
+\STATE \COMMENT{Stage 2 guard: refractory or hot-pixel}
+\IF{$H_{x_i,y_i}=1$ \textbf{or} $\Delta_i^{\text{raw}} < \tau_{\text{ref,dig}}$}
+    \STATE $A_i \gets 0$;\quad $c_i \gets 0$ \COMMENT{$U$ untouched; Stage~3 skipped}
+\ELSE
+    \STATE \COMMENT{Stage 3 accepted-neighbor support}
+    \STATE $S_i \gets 0$
+    \FORALL{$(u,v) \in \mathcal{N}(x_i,y_i)\setminus\{(x_i,y_i)\}$}
+        \IF{$0 < t_i - T_{u,v}^{\text{acc},p_i} < \Delta t$}
+            \STATE $S_i \gets S_i + 1$
+        \ENDIF
+    \ENDFOR
+    \STATE \COMMENT{Stage 4 polarity-conditioned threshold}
+    \STATE $A_i \gets \ind{S_i \geq K_0 + \gamma Q_i}$
+    \STATE \COMMENT{Hot-pixel maintenance: only after support evaluation}
+    \IF{$S_i = 0$}
+        \STATE $U_{x_i,y_i} \gets U_{x_i,y_i} + 1$
+    \ELSE
+        \STATE $U_{x_i,y_i} \gets 0$
+    \ENDIF
+    \IF{$R_{x_i,y_i} > R_{\max}$ \textbf{and} $U_{x_i,y_i} \geq U_{\text{hot}}$}
+        \STATE $H_{x_i,y_i} \gets 1$
+    \ENDIF
+    \STATE \COMMENT{Stage 5 confidence code on accept}
+    \IF{$A_i = 1$}
+        \STATE $T_{x_i,y_i}^{\text{acc},p_i} \gets t_i$
+        \STATE $c_i \gets 1 + \ind{S_i \geq K_{\text{high}}}$
+    \ELSE
+        \STATE $c_i \gets 0$
+    \ENDIF
+\ENDIF
+\STATE $T_{x_i,y_i}^{\text{raw,last}} \gets t_i$;\quad $p_{x_i,y_i}^{\text{raw,last}} \gets p_i$
+\RETURN $(A_i,c_i)$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Stage 1: Sensor-Side Bias Shaping}
+\label{sec:bias}
+
+The cheapest event to process is the one never generated. Stage~1 therefore calibrates the sensor before digital filtering.
+
+The underlying protocol has three parts. First, dark-scene and static-scene streams are recorded to estimate global dark rate $\lambda_n$, per-pixel rate spread, short-lag opposite-polarity fraction $q_n$, and neighborhood-supported fraction. Second, a grid over bias settings (refractory period and ON/OFF thresholds) is swept to locate operating points that reduce the dark-scene rate while preserving supported events~\citep{delbruck2021feedback,mcreynolds2022experimental}. Third, at least two operating modes are exposed: a nominal mode for regular illumination and a low-light mode with longer refractory period and asymmetric thresholds, following the low-light findings of \citet{mcreynolds2023lowlight}. If the sensor supports bandwidth control or binning, those controls belong here rather than in the digital logic~\citep{graca2024scidvs,graca2023optimal}. Algorithm~\ref{alg:stage1} formalizes the procedure.
+
+\begin{algorithm}[t]
+\caption{Sensor-side bias calibration (Stage~1)}
+\label{alg:stage1}
+\begin{algorithmic}[1]
+\REQUIRE Dark-scene stream $\mathcal{S}_{\text{dark}}$; static-scene stream $\mathcal{S}_{\text{stat}}$; test-pattern stream $\mathcal{S}_{\text{test}}$; bias grid $\mathcal{B}$ spanning refractory period and ON/OFF thresholds; tolerances $\epsilon_n, \epsilon_s$; utility weight $\beta$
+\ENSURE Nominal bias $b^{*}_{\text{nom}}$ and low-light bias $b^{*}_{\text{low}}$
+\STATE \COMMENT{Characterize uncalibrated noise statistics}
+\STATE From $\mathcal{S}_{\text{dark}}$ estimate global dark rate $\lambda_n$, per-pixel rate spread, and opposite-polarity-pair fraction $q_n$
+\STATE From $\mathcal{S}_{\text{stat}}$ estimate supported-fraction baseline for static textures
+\STATE $\mathcal{B}^{*} \gets \emptyset$
+\FORALL{$b \in \mathcal{B}$}
+    \STATE Reconfigure sensor with bias $b$ and re-record $(\mathcal{S}_{\text{dark}}^{(b)}, \mathcal{S}_{\text{test}}^{(b)})$
+    \STATE Compute noise reduction $\Delta\lambda_n(b)$ and supported-fraction preservation $\pi_s(b)$
+    \IF{$\Delta\lambda_n(b) \geq \epsilon_n$ \textbf{and} $\pi_s(b) \geq 1-\epsilon_s$}
+        \STATE $\mathcal{B}^{*} \gets \mathcal{B}^{*} \cup \{b\}$
+    \ENDIF
+\ENDFOR
+\STATE $b^{*}_{\text{nom}} \gets \arg\max_{b\in\mathcal{B}^{*}} \bigl[\pi_s(b) - \beta\,\lambda_n(b)\bigr]$
+\STATE $b^{*}_{\text{low}} \gets \arg\min_{b\in\mathcal{B}^{*}} \lambda_n(b)$ subject to longer $\tau_{\text{ref,an}}$ and asymmetric ON/OFF thresholds~\citep{mcreynolds2023lowlight}
+\RETURN $(b^{*}_{\text{nom}},\, b^{*}_{\text{low}})$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Stage 2: Same-Pixel Refractory and Hot-Pixel Guard}
+\label{sec:refractory}
+
+Stage~2 reads $\mathcal{M}^{\text{raw}}[x_i,y_i]$ to apply a per-event local guard:
+\begin{equation}
+G_i = \ind{H_{x_i,y_i}=0}\cdot\ind{t_i - T_{x_i,y_i}^{\text{raw,last}} \geq \tau_{\text{ref,dig}}}.
+\label{eq:guard}
+\end{equation}
+The first factor suppresses known hot pixels; the second enforces a digital refractory period on \emph{raw} history, not on accepted history. That distinction matters: the refractory guard is meant to describe the physical arrival process at the pixel, including rejected events.
+
+The per-event guard check is a constant-time same-pixel operation, consistent with P1. However, the hot-pixel flag~$H_{x,y}$ that the guard reads is itself maintained by a cross-stage mechanism: it is set to~$1$ only when a high rate coincides with a persistent lack of \emph{support}, where support is computed by Stage~3. This coupling operates with a one-event delay and does not increase the per-event cost of the Stage~2 check; in Algorithm~\ref{alg:pipeline} it is implemented by updating $U$ and $H$ only after the Stage~3 support count $S_i$ has been evaluated.
+
+The rate estimate is updated as
+\begin{equation}
+R_{x_i,y_i} \leftarrow \alpha \cdot \frac{1}{\max(\Delta_i^{\text{raw}},\varepsilon)} + (1-\alpha)R_{x_i,y_i},
+\label{eq:rate}
+\end{equation}
+where $\varepsilon$ prevents division by zero in hardware. The unsupported-streak counter is updated by
+\begin{equation}
+U_{x_i,y_i} \leftarrow
+\begin{cases}
+U_{x_i,y_i}+1, & \text{if Stage~3 evaluated and } S_i = 0,\\
+0, & \text{if Stage~3 evaluated and } S_i > 0,\\
+U_{x_i,y_i}, & \text{if guarded (no Stage~3 evaluation)},
+\end{cases}
+\label{eq:unsupported}
+\end{equation}
+and the hot-pixel flag is written as
+\begin{equation}
+H_{x_i,y_i} \gets 1
+\quad \text{if} \quad
+R_{x_i,y_i} > R_{\max}
+\;\text{and}\;
+U_{x_i,y_i} \geq U_{\text{hot}}.
+\label{eq:hotpixel}
+\end{equation}
+The third branch of~\eqref{eq:unsupported} is the correction to the earlier semantics: events suppressed by the refractory guard or by an existing hot-pixel status do not charge $U_{x,y}$, because those suppressions reflect temporal proximity or prior pixel status rather than spatial isolation. This keeps the hot-pixel detector aligned with its intent: high raw rate combined with sustained spatial isolation.
+
+\textbf{Hot-pixel recovery.}
+A pixel flagged as hot is not permanently silenced. If the next event at the pixel arrives after a quiescent interval exceeding a recovery timeout $T_{\text{recover}}$, the following update fires:
+\begin{equation}
+\begin{split}
+&\text{if } H_{x_i,y_i}=1 \text{ and } \Delta_i^{\text{raw}} \geq T_{\text{recover}}, \\
+&\quad \text{then } H_{x_i,y_i} \gets 0,\; U_{x_i,y_i} \gets 0,\; R_{x_i,y_i} \gets 0.
+\end{split}
+\label{eq:hotpixel_recovery}
+\end{equation}
+This prevents transient saturation events or brief circuit anomalies from permanently disabling a pixel. A typical choice is $T_{\text{recover}} \in [0.5,\,2.0]$\,s, well above the inter-event intervals of genuine hot pixels but short enough to restore a transiently stuck pixel within seconds. Because $T_{\text{recover}}\gg\tau_{\text{ref,dig}}$, the recovery update and the refractory guard never fire on the same event.
+
+\subsection{Stage 3: Accepted-Neighbor Support Computation}
+\label{sec:support}
+
+Stage~3 computes same-polarity support from \emph{accepted} neighborhood history:
+\begin{equation}
+S_i =
+\sum_{(u,v) \in \mathcal{N}(x_i,y_i)\setminus\{(x_i,y_i)\}}
+\ind{0 < t_i - T_{u,v}^{\text{acc},p_i} < \Delta t}.
+\label{eq:support}
+\end{equation}
+The use of $T^{\text{acc},p_i}$ rather than raw timestamps prevents recently rejected noise events from seeding further support. This is the second half of the split-state repair.
+
+The same-polarity restriction also has a modeling role. True motion edges tend to generate short spatiotemporal clusters of equal polarity, whereas opposite-polarity shot-noise pairs are primarily same-pixel phenomena. Stage~3 therefore measures local consensus \emph{within the accepted stream} rather than raw event density alone.
+
+\subsection{Stage 4: Polarity-Conditioned Thresholding}
+\label{sec:polarity}
+
+Stage~4 uses raw same-pixel history to detect short-lag opposite-polarity pairs:
+\begin{equation}
+Q_i = \ind{p_i \neq p_{x_i,y_i}^{\text{raw,last}}}\cdot\ind{t_i - T_{x_i,y_i}^{\text{raw,last}} < \tau_{\text{pair}}}.
+\label{eq:polarity}
+\end{equation}
+Instead of acting as a veto on an already rejected case, the flag changes the support requirement:
+\begin{equation}
+\begin{split}
+A_i &= \ind{H_{x_i,y_i}=0} \cdot \ind{t_i - T_{x_i,y_i}^{\text{raw,last}} \geq \tau_{\text{ref,dig}}} \\
+&\quad \cdot \ind{S_i \geq K_0 + \gamma Q_i}.
+\end{split}
+\label{eq:accept}
+\end{equation}
+Here $K_0 \geq 1$ is the baseline support threshold and $\gamma \in \{0,1,2,\ldots\}$ is a polarity penalty. When $Q_i=0$, the rule reduces to the usual support filter with threshold $K_0$. When $Q_i=1$, the event must clear the stricter threshold $K_0+\gamma$. For $\gamma=1$, a flagged opposite-polarity short-lag event needs one extra supporting neighbor relative to an unflagged event. Stage~4 is therefore non-redundant by construction, and Proposition~\ref{prop:shot} quantifies the resulting rejection ratio.
+
+This rule also clarifies the semantics of the two states. $Q_i$ is raw-history evidence about same-pixel temporal structure; $S_i$ is accepted-history evidence about neighborhood consensus. The filter keeps an event only when both views are compatible.
+
+\textbf{Asymmetric effect on signal versus shot noise.}
+Let $q_s = \Prob(Q_i=1\mid e_i\in\mathcal{E}_{\text{sig}})$ denote the probability that a true signal event is flagged by $Q_i$. The effect of the polarity penalty on the two classes is
+\begin{equation}
+\Prob(A_i=1\mid e_i\in\mathcal{E}_{\text{sig}}) = (1-q_s)\Prob(S_i\geq K_0) + q_s\Prob(S_i\geq K_0+\gamma),
+\label{eq:sig_accept}
+\end{equation}
+which has the same functional form as the BA expression in~\eqref{eq:prop_ba} but with a different underlying support distribution. Under Assumption~A1, signal events that happen to be polarity-reversals of the previous raw same-pixel event typically occur at edges that are \emph{simultaneously} well supported by same-polarity activity in the neighborhood (e.g., an edge passing over the pixel after a prior edge of opposite polarity), so their support distribution is concentrated well above $K_0+\gamma$ for moderate $\gamma$. Under Assumption~A3, shot-noise events with $Q_i{=}1$ have support concentrated near $\mu_s$ with $\mu_s\ll K_0$. Consequently the polarity penalty is asymmetrically harder on shot-noise than on signal: the multiplicative suppression of shot-noise acceptance given by Proposition~\ref{prop:shot} is not paid back in kind by the signal class, because signal events flagged by $Q_i$ typically clear $K_0+\gamma$ anyway. This is the mechanism by which $\gamma>0$ improves the signal-to-noise ratio of the retained stream rather than merely shifting a threshold.
+
+\subsection{Stage 5: Confidence-Coded Event Output}
+\label{sec:confidence}
+
+Stage~5 converts the support score into a small confidence code:
+\begin{equation}
+c_i =
+\begin{cases}
+0, & \text{if } A_i = 0,\\
+1, & \text{if } A_i = 1 \text{ and } S_i < K_{\text{high}},\\
+2, & \text{if } A_i = 1 \text{ and } S_i \geq K_{\text{high}},
+\end{cases}
+\label{eq:confidence}
+\end{equation}
+with $K_{\text{high}} > K_0$ chosen so that $c=2$ denotes stronger local evidence than mere threshold crossing. This step preserves graded reliability information that binary keep/drop filters discard.
+
+\subsection{Stage 6: Direct ON/OFF SNN Ingestion}
+\label{sec:snn}
+
+Accepted events are routed into separate ON and OFF input populations:
+\begin{equation}
+\begin{split}
+I^{+}_{x,y}(t) &= \sum_{i:A_i=1,\,p_i=+1} w_{c_i}\,\delta(t-t_i), \\
+I^{-}_{x,y}(t) &= \sum_{i:A_i=1,\,p_i=-1} w_{c_i}\,\delta(t-t_i),
+\end{split}
+\label{eq:input}
+\end{equation}
+where $w_{c_i}$ is a confidence-modulated synaptic weight:
+\begin{equation}
+w_c =
+\begin{cases}
+w_{\text{low}}, & c=1,\\
+w_{\text{high}}, & c=2.
+\end{cases}
+\label{eq:weights}
+\end{equation}
+In binary-spike hardware, the same information can be represented by duplicated spikes or by selecting between two synaptic pathways.
+
+The first spiking layer is a coincidence-and-inhibition front end similar in spirit to HFirst~\citep{orchard2015hfirst}. Its role is not to replace denoising, but to absorb residual isolated events that survive the hardware filter. For time-stepped hardware, the same interface can be implemented with very short sparse event-count slices rather than dense frames~\citep{bonazzi2024retina}.
+
+A diagnostic quantity of interest is the learned weight ratio $w_{\text{high}}/w_{\text{low}}$ after training. If the SNN consistently learns $w_{\text{high}}/w_{\text{low}}\gg 1$, the network is exploiting the confidence signal; if the ratio remains near unity across seeds and datasets, Stage~5 contributes no information beyond binary acceptance. The evaluation protocol (Section~\ref{sec:evaluation}) therefore lists this ratio alongside downstream accuracy.
+
+\subsection{Per-Event Complexity and Throughput}
+\label{sec:complexity}
+
+Table~\ref{tab:complexity} summarizes the analytical per-event cost of the digital stages for a $3\times3$ neighborhood. The numbers are operation counts, not measured hardware results.
+
+\begin{table}[t]
+\centering
+\caption{Analytical per-event cost for Stages~2--5}
+\label{tab:complexity}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{clcc}
+\toprule
+\textbf{Stage} & \textbf{Operation} & \textbf{Reads} & \textbf{Compares} \\
+\midrule
+2 & Raw-state guard, rate update, recovery check & 1 & 3 \\
+3 & Accepted-neighbor support ($3\times3$) & 8 & 8 \\
+4 & Polarity-conditioned thresholding & 0$^a$ & 2 \\
+5 & Confidence coding & 0 & 1 \\
+\midrule
+\multicolumn{2}{l}{\textbf{Total}} & \textbf{9} & \textbf{14} \\
+\bottomrule
+\multicolumn{4}{l}{\footnotesize $^a$Reuses $T^{\text{raw,last}}$ and $p^{\text{raw,last}}$ already read in Stage~2.}
+\end{tabular}
+}
+\end{table}
+
+\textbf{Analytical throughput.}
+Let $N_{\text{ops}}=23$ be the per-event operation count of the balanced digital variant (Table~\ref{tab:complexity}). For a single serial pipeline running at clock frequency $f_{\text{clk}}$, the per-lane throughput ceiling is
+\begin{equation}
+\Lambda_{\text{serial}} \;=\; f_{\text{clk}}/N_{\text{ops}}.
+\label{eq:throughput_serial}
+\end{equation}
+At $f_{\text{clk}}=100$\,MHz this gives $\Lambda_{\text{serial}}\approx 4.35$~Mev/s. Lanewise parallelization across $N_{\text{lanes}}$ independent pixel groups scales this proportionally,
+\begin{equation}
+\Lambda_{\text{parallel}} \;=\; N_{\text{lanes}}\cdot \Lambda_{\text{serial}},
+\label{eq:throughput_parallel}
+\end{equation}
+so that roughly $N_{\text{lanes}}=23$ at $100$\,MHz saturates a $100$~Mev/s sensor. The estimate is analytical; actual hardware throughput is additionally bounded by memory bandwidth for $\mathcal{M}^{\text{raw}}$ and $\mathcal{M}^{\text{acc}}$. Stage~1 bias shaping imposes no digital cost, and Stage~6 SNN inference is a separate compute budget that inherits the reduced event count from Stages~2--5.
+
+%%% ============================================================
+\section{Implementation Variants}
+\label{sec:variants}
+
+The same logic can be mapped onto three different implementation regimes. The purpose of this section is not to claim measured hardware superiority, but to expose the trade-offs imposed by the split-state design.
+
+\subsection{Stage Support Across Variants}
+\label{sec:variant_map}
+
+Table~\ref{tab:stage_map} summarizes which parts of the revised architecture each variant can support.
+
+\begin{table*}[t]
+\centering
+\caption{Support of the split-state architecture across implementation variants}
+\label{tab:stage_map}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Property} & \textbf{Balanced} & \textbf{Low-Mem} & \textbf{Low-Lat} \\
+\midrule
+Exact $\mathcal{M}^{\text{raw}}$ & \checkmark & Approx. & Analog/local \\
+Exact $\mathcal{M}^{\text{acc}}$ & \checkmark & Approx. & Analog support only \\
+Stage~2 guard & Full & Approx. & Analog/local \\
+Stage~3 support & Full & Row/column approx. & Full analog \\
+Stage~4 polarity threshold & Full & --- & --- \\
+Stage~5 confidence & Full & Approx. & --- \\
+Stage~6 SNN ingestion & Full & Full & Full \\
+Hot-pixel recovery & Full & Approx. & --- \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Variant A: Balanced Per-Pixel Digital Design}
+\label{sec:variant_balanced}
+
+This variant stores both $\mathcal{M}^{\text{raw}}$ and $\mathcal{M}^{\text{acc}}$ per pixel. With 32-bit timestamps, one byte for packed raw polarity and hot-pixel state, one byte for the rate estimate, and one byte for the unsupported-event streak, the state budget is
+\begin{equation}
+\begin{aligned}
+M_{\text{balanced}}
+&= W H \times (4 + 4 + 4 + 1 + 1 + 1)\;\text{bytes} \\
+&= 15 W H\;\text{bytes}.
+\end{aligned}
+\label{eq:mem_balanced}
+\end{equation}
+For a $640\times480$ sensor, this is
+\[
+15 \times 640 \times 480 = 4{,}608{,}000\;\text{bytes} \approx 4.40\;\text{MiB}.
+\]
+If timestamps are quantized to 16 bits, the budget falls to roughly $2.64$\,MiB. The recovery timeout $T_{\text{recover}}$ requires no additional per-pixel storage because it is compared against $\Delta_i^{\text{raw}}$, which is already computed from the stored $T^{\text{raw,last}}$. The point is not that such a design always fits small on-chip memories; rather, it is the fidelity-maximizing reference implementation against which the lower-memory variants should be understood.
+
+At $100$\,MHz, the analytical throughput estimate of Eq.~\eqref{eq:throughput_serial} gives $\approx 4.35$~Mev/s per lane, and the 8-neighbor scan implies an order-of-magnitude latency of about $80$\,ns for the Stage~3 read sequence alone, with modest overhead for the other stages.
+
+\subsection{Variant B: Ultra-Low-Memory Row/Column Approximation}
+\label{sec:variant_lowmem}
+
+The low-memory alternative replaces per-pixel maps with row/column state similar to the $O(m{+}n)$ design of Khodamoradi and Kastner~\citep{khodamoradi2018onoise}. A minimal timestamp budget is
+\begin{equation}
+M_{\text{rc}} \approx 2(W+H)\times 4\;\text{bytes},
+\label{eq:mem_rc}
+\end{equation}
+which gives $8.75$\,KiB at $640\times480$ before adding small counters and flags. Even with lightweight auxiliary state, the design remains in the low-kilobyte range.
+
+The trade-off is semantic fidelity. The row/column approximation can provide a coarse refractory-like guard and a coarse support estimate, but it does not retain the exact same-pixel raw polarity needed for Stage~4. The accepted-history map is likewise approximate, so Stage~5 still exists but now reflects a noisy support estimate. This variant is therefore best understood as a resource-constrained approximation of the full logic, not as an equivalent implementation.
+
+\subsection{Variant C: Ultra-Low-Latency Mixed-Signal Front End}
+\label{sec:variant_lowlat}
+
+The mixed-signal option follows the spirit of \citet{liu2019mixed}: the local support mechanism is pushed into analog or mixed-signal circuitry to minimize latency and power. In that regime, Stage~3 can be implemented directly, while the exact split-state bookkeeping of Stages~2 and~4 is only partially available. The missing functionality must then be absorbed by Stage~1 bias shaping and by the Stage~6 coincidence layer.
+
+This is the fastest and lowest-power regime conceptually, but it is also the one in which the paper's full logical rule is least faithfully realized. It should therefore be treated as a deployment-oriented approximation rather than as the canonical embodiment of the theory.
+
+\subsection{Comparative Summary}
+\label{sec:variant_summary}
+
+Table~\ref{tab:variants} compares the three variants. The latency figures are analytical or literature-based order-of-magnitude references, not measurements from this manuscript.
+
+\begin{table*}[t]
+\centering
+\caption{Analytical/reference comparison of implementation variants for a $640\times480$ sensor}
+\label{tab:variants}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Property} & \textbf{Balanced} & \textbf{Low-Mem} & \textbf{Low-Lat} \\
+\midrule
+State memory & $\approx 4.40$ MiB & $\approx 8.75$ KiB $+$ small state & Analog \\
+Raw/accepted split & Exact & Approximate & Partial \\
+Stage~4 availability & Full & --- & --- \\
+Stage~5 availability & Full & Approximate & --- \\
+Hot-pixel recovery & Full ($T_{\text{recover}}$) & Approximate & --- \\
+Serial throughput @ $100$\,MHz & $\approx 4.35$ Mev/s$^a$ & $\approx 8$--$15$ Mev/s$^a$ & $\geq 100$ Mev/s$^b$ \\
+Latency/event & $\sim 80$--$120$ ns$^a$ & $\sim 40$--$80$ ns$^a$ & $\sim 10$ ns$^b$ \\
+Primary trade-off & Fidelity & Memory & Latency/power \\
+Target scenario & FPGA/ASIC edge inference & Wearable/IoT & In-sensor front end \\
+\bottomrule
+\multicolumn{4}{l}{\footnotesize $^a$Analytical order-of-magnitude estimate at $\sim100$\,MHz from Eq.~\eqref{eq:throughput_serial}.} \\
+\multicolumn{4}{l}{\footnotesize $^b$Representative literature figure from mixed-signal support filtering~\citep{liu2019mixed}.}
+\end{tabular}
+\end{table*}
+
+%%% ============================================================
+\section{Evaluation Protocol and Reproducibility}
+\label{sec:evaluation}
+
+This section specifies the evaluation protocol that accompanies the architecture. It is designed so that follow-up empirical studies---whether performed by the authors or by independent groups---can adopt the protocol verbatim and produce directly comparable numbers. No quantitative results are reported in this paper; the purpose of the section is to fix the \emph{interface} between the theoretical contribution of Sections~\ref{sec:problem}--\ref{sec:variants} and any subsequent empirical validation.
+
+\subsection{Evaluation Questions}
+
+The protocol is organized around five questions that the theoretical contribution should be tested against:
+\begin{itemize}
+    \item \textbf{Q1:} How well do the supported event-domain filters separate signal from synthetic BA, shot, and mixed noise at the event level?
+    \item \textbf{Q2:} Does direct event-domain denoising improve downstream SNN accuracy and efficiency relative to raw-event and frame-based baselines operating on the same backbone?
+    \item \textbf{Q3:} How much does each of Stage~2 (refractory guard), Stage~3 (same-polarity support), Stage~4 (polarity-conditioned threshold increase), and Stage~5 (confidence coding) contribute in isolation?
+    \item \textbf{Q4:} Which parameter settings $(\tau_{\text{ref,dig}}, \Delta t, K_0, \gamma, \tau_{\text{pair}}, K_{\text{high}})$ are selected by the tuning sweep, and how sensitive is the full configuration to those choices?
+    \item \textbf{Q5:} Does the SNN exploit the confidence signal, i.e.\ does the learned weight ratio $w_{\text{high}}/w_{\text{low}}$ deviate meaningfully from unity?
+\end{itemize}
+
+\subsection{Datasets, Tasks, and Splits}
+
+The protocol uses four event-native classification datasets that are widely available and that cover low-, medium-, and high-noise regimes: N-MNIST, DVS128 Gesture, N-Caltech101, and CIFAR10-DVS (Table~\ref{tab:datasets_exp}). Each dataset serves two roles. First, the clean event stream is perturbed with synthetic BA, shot, and mixed noise to measure event-level filtering quality. Second, the same dataset is used for downstream classification so that the effect of denoising on direct SNN ingestion can be measured. Official train/test partitions are used when provided by the underlying Tonic dataset; otherwise the protocol materializes a stratified train/validation/test split once with seed $2027$ and reuses it for every method and every run.
+
+\begin{table*}[t]
+\centering
+\caption{Datasets and evaluation roles. N-Caltech101 events are resized with aspect-ratio-preserving scaling and zero-centered padding to $128\times 128$ before filtering and slicing so that all methods on that dataset share the same spatial support.}
+\label{tab:datasets_exp}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Dataset} & \textbf{Resolution} & \textbf{Roles} & \textbf{Split policy} & \textbf{Notes} \\
+\midrule
+N-MNIST & $34\times 34$ & Synthetic-noise filter evaluation + classification & Official train/test + stratified validation split & Low-resolution handwritten characters \\
+DVS128 Gesture & $128\times 128$ & Synthetic-noise filter evaluation + classification & Official train/test + stratified validation split & Gesture benchmark with native event resolution \\
+N-Caltech101 & $128\times 128$ after resizing & Synthetic-noise filter evaluation + classification & Stratified train/validation/test split with seed $2027$ & Fine-grained recognition benchmark \\
+CIFAR10-DVS & $128\times 128$ & Synthetic-noise filter evaluation + classification & Stratified train/validation/test split with seed $2027$ & Relatively noisy low-contrast benchmark \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+For the event-level and robustness studies, the protocol injects three synthetic corruption models into each clean event stream:
+\begin{itemize}
+    \item \textbf{BA noise:} spatially independent BA-like events sampled at a target ratio $\rho \in \{0.5,1,2,5,10\}$ relative to the clean stream length.
+    \item \textbf{Shot noise:} same-pixel alternating-polarity event pairs with random starting polarity and inter-event lag smaller than the configured pair window.
+    \item \textbf{Mixed noise:} a superposition of the BA and shot mechanisms using a fixed $70{:}30$ split in the injected event count.
+\end{itemize}
+The observed stream therefore becomes
+\begin{equation}
+\mathcal{E}_{\text{obs}} = \mathcal{E}_{\text{task}} \uplus \mathcal{E}_{\text{BA}} \uplus \mathcal{E}_{\text{shot}}.
+\label{eq:observed_stream}
+\end{equation}
+
+\subsection{Compared Methods}
+
+The protocol compares only methods that can be implemented deterministically from the same codebase.
+
+\textbf{Event-domain filtering comparison:}
+\begin{enumerate}
+    \item BA filter~\citep{delbruck2008ba}
+    \item STCF~\citep{khodamoradi2018onoise}
+    \item Proposed +REF (Stage~2 only)
+    \item Proposed +SUP (Stages~2--3)
+    \item Proposed +OPP (Stages~2--4)
+    \item Proposed +CONF (Stages~2--5 with confidence coding)
+\end{enumerate}
+
+\textbf{System-level classification comparison:}
+\begin{enumerate}
+    \item Raw events $\rightarrow$ direct SNN (no denoising)
+    \item Frame accumulation $\rightarrow$ SNN
+    \item BA filter $\rightarrow$ direct SNN
+    \item STCF $\rightarrow$ direct SNN
+    \item Proposed +REF, +SUP, +OPP, and +CONF $\rightarrow$ direct ON/OFF confidence-coded SNN ingestion
+\end{enumerate}
+
+The low-memory and low-latency variants of Section~\ref{sec:variants} are treated as resource-footprint variants rather than as main accuracy baselines.
+
+\subsection{Implementation Settings}
+
+Table~\ref{tab:exp_settings} fixes the shared settings. The direct-event pipelines share one event-native SNN backbone, while the frame baseline keeps the same depth but consumes dense two-channel accumulation frames instead of confidence maps.
+
+\begin{table*}[t]
+\centering
+\caption{Evaluation settings fixed by the protocol.}
+\label{tab:exp_settings}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{ll}
+\toprule
+\textbf{Item} & \textbf{Setting} \\
+\midrule
+Software stack & Python, PyTorch, snnTorch, Tonic, NumPy, Numba, pandas, scikit-learn, matplotlib, seaborn \\
+Execution device & CUDA when available, otherwise CPU \\
+Direct-event backbone & Confidence-weighted ON/OFF input, $3\times 3$ conv(2$\rightarrow$16), LIF, strided conv(16$\rightarrow$32), BN, LIF, strided conv(32$\rightarrow$64), BN, LIF, adaptive pooling, linear classifier, output LIF \\
+Frame baseline backbone & Same depth as the direct-event network, but with dense two-channel ON/OFF count slices instead of four confidence maps \\
+Input interface & Dual ON/OFF confidence coding with learnable low- and high-confidence weights $(w_{\text{low}}, w_{\text{high}})$ \\
+Temporal slicing & Dataset-specific \texttt{time\_bin\_us} $\in \{1000,2000,5000\}$ chosen from the $P_{99}$ duration rule with at most $300$ slices \\
+Optimizer & AdamW \\
+Initial learning rate & $2\times 10^{-3}$ \\
+Weight decay & $10^{-4}$ \\
+Batch sizes & N-MNIST: 128; DVS128 Gesture: 32; N-Caltech101: 32; CIFAR10-DVS: 64 \\
+Epochs & N-MNIST: 100; DVS128 Gesture: 150; N-Caltech101: 150; CIFAR10-DVS: 150 \\
+Scheduler & Cosine annealing after the first ten epochs \\
+Surrogate gradient & Fast-sigmoid surrogate derivative in every LIF cell \\
+Classification loss & Spike-rate cross-entropy on the summed output spike counts \\
+Validation policy & Stratified validation split fixed once with seed $2027$ \\
+Training seeds & $\{0,1,2\}$ \\
+Tuning grids & BA/STCF: $\Delta t\in\{1000,2000,5000\}$; Proposed +REF: $\tau_{\text{ref,dig}}\in\{500,1000,2000\}$; Proposed +SUP/+OPP/+CONF: $\tau_{\text{ref,dig}}\in\{500,1000,2000\}$, $\Delta t\in\{1000,2000,5000\}$, $K_0\in\{1,2\}$, $\gamma\in\{0,1,2\}$, $\tau_{\text{pair}}\in\{500,1000,2000\}$, $K_{\text{high}}\in\{2,3,4\}$ \\
+Model selection & Highest mean synthetic-noise AUC during tuning for filters; highest validation accuracy during training for the SNN \\
+Recovery timeout & $T_{\text{recover}}\in\{0.5,1.0,2.0\}$\,s \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\subsection{Evaluation Metrics}
+
+\textbf{Event-level metrics.} For the synthetic-noise sweeps, the protocol reports true-positive rate (TPR), false-positive rate (FPR), area under the operating-point curve (AUC), and mean Event Keep Ratio (EKR) after filtering. The event-retention metric is
+\begin{equation}
+\text{EKR} = \frac{|\mathcal{E}_{\text{kept}}|}{|\mathcal{E}_{\text{raw}}|}.
+\label{eq:ekr}
+\end{equation}
+
+\textbf{System-level metrics.} For downstream classification, the protocol reports top-1 test accuracy, EKR, compression ratio, synaptic operations (SOPs) for event-domain models, dense MAC counts for the frame baseline, filter-state memory, parameter memory, peak activation memory, median preprocessing latency, median inference latency, and median end-to-end latency.
+
+\textbf{Confidence utilization.} For the full proposed configuration, the protocol reports the learned weight ratio $w_{\text{high}}/w_{\text{low}}$ averaged over seeds and datasets as a direct test of Q5.
+
+\textbf{Robustness summary.} For controlled-corruption experiments, the protocol summarizes performance across the noise ratios $\mathcal{R}=\{0.5,1,2,5,10\}$ with the area under the noise-robustness curve
+\begin{equation}
+\text{AUNC} = \frac{1}{|\mathcal{R}|}\sum_{\rho\in\mathcal{R}} \text{Acc}(\rho),
+\label{eq:aunc}
+\end{equation}
+where $\text{Acc}(\rho)$ is the test accuracy after injecting a noise ratio $\rho$.
+
+\subsection{Reproducibility}
+
+To make the protocol self-contained, any follow-up study using this specification should publish: (i) the exact version of the codebase corresponding to the reported numbers; (ii) random seeds for train/validation splits ($2027$) and for training ($\{0,1,2\}$); (iii) the hardware and driver versions used for timing measurements; (iv) the parameter values selected by the tuning sweep per dataset; and (v) the deterministic corruption seeds used to inject BA, shot, and mixed noise. Reporting mean $\pm$ standard deviation over training seeds, rather than a single run, is required for the system-level comparison. Filter-state memory values for the balanced and low-memory variants are fully determined by Eqs.~\eqref{eq:mem_balanced}--\eqref{eq:mem_rc} and can therefore be reported analytically alongside any measured preprocessing latency.
+
+%%% ============================================================
+\section{Discussion}
+\label{sec:discussion}
+
+The paper's main claim is modest but important. Event-domain denoising for direct SNN ingestion does not require a new learned model, a new dataset, or a new benchmark result in order to become a stronger paper. It first requires logically sound state semantics. By splitting raw history from accepted support history, the revised manuscript makes the filter rule interpretable and the role of the polarity-conditioned stage non-redundant.
+
+The architecture also clarifies the division of labor between hand-designed filtering and downstream learning. The denoiser is responsible for cheap local rejection of obvious noise and for exposing confidence information. The SNN is responsible for learning how much to trust the retained stream, not for reconstructing information that was discarded by an inconsistent front end.
+
+The corrected analytical results sharpen the architectural claims. Corollary~\ref{cor:fixed_point} now exposes a concrete design rule (Eq.~\ref{eq:stability}) rather than a local-stability statement only: under minimal support $K_0{=}1$, BA self-quenching is guaranteed whenever $M\lambda_n\Delta t\,(1-q_n)<1$. Proposition~\ref{prop:shot} gives a closed-form, leading-order acceptance ratio $r(\gamma)\approx \mu_s^\gamma\,K_0!/(K_0+\gamma)!$ that a designer can evaluate directly to select the polarity penalty $\gamma$ before any training run. Together with Proposition~\ref{prop:ordering}, these results move Section~\ref{sec:problem} from rhetorical motivation to actionable parameter guidance.
+
+\textbf{Limitations.}
+The analytical results rely on approximations. The Poisson independence assumption for BA noise after thinning holds best when noise is rare and the support window is short; under heavy noise the self-consistency fixed point (Corollary~\ref{cor:fixed_point}) provides a useful bound but not an exact acceptance rate. The leading-order shot-noise rejection ratio (Proposition~\ref{prop:shot}) uses the Poisson leading term $\mu_s^{k}/k!$ which becomes coarse when $\mu_s$ approaches $K_0$; Eq.~\eqref{eq:shot_ratio} should be used for the exact ratio in that regime. Parameter selection still requires calibration, especially for $\tau_{\text{pair}}$ and $\gamma$, which must reflect the operating illumination and motion regime. The hot-pixel recovery timeout $T_{\text{recover}}$ introduces an additional tunable parameter, though it is less sensitive than the core filter parameters. The low-memory and mixed-signal variants sacrifice some fidelity to the split-state logic; in particular, the row/column approximation lacks the exact same-pixel raw polarity needed for Stage~4. Finally, because the manuscript is theory-and-architecture first, it does not yet establish empirical superiority over prior filters; that remains follow-up work under the protocol of Section~\ref{sec:evaluation}.
+
+%%% ============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper reformulated event-domain denoising for DVS-to-SNN pipelines as a theory-grounded architecture problem. The central technical repair was to separate raw same-pixel history from accepted support history and to replace the earlier redundant Stage~3/Stage~4 coupling with a polarity-conditioned support rule. That change makes the opposite-polarity stage mathematically visible rather than rhetorically motivated.
+
+On top of that repair, the paper provided a complete six-stage event-native pipeline with three strengthened analytical results---a self-consistent BA false-accept bound with an explicit stability criterion $M\lambda_n\Delta t\,(1-q_n)<1$, a leading-order shot-noise rejection ratio $r(\gamma)\approx \mu_s^\gamma\,K_0!/(K_0+\gamma)!$, and a DVS-specialized cascade-ordering criterion---together with a hardware-aware mapping across balanced, ultra-low-memory, and ultra-low-latency regimes and an analytical per-event throughput bound. The hot-pixel recovery mechanism ensures that transient anomalies do not permanently disable pixels, and the cleaned hot-pixel bookkeeping in Algorithm~\ref{alg:pipeline} keeps the pixel-isolation detector aligned with its intent.
+
+A reproducible evaluation protocol and metric specification are provided for follow-up empirical validation. The theoretical and architectural foundation reported here is self-contained and is intended to serve as the reference against which future quantitative evaluations can be compared.
+
+\printcredits
+
+\bibliographystyle{cas-model2-names}
+\bibliography{cas-refs}
+
+\end{document}

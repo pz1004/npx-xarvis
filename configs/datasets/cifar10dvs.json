@@ -1,0 +1,6 @@
+{
+  "batch_size": 64,
+  "epochs": 150,
+  "pretty_name": "CIFAR10-DVS"
+}
+

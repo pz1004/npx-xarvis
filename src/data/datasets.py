@@ -1,0 +1,397 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TypeAlias
+
+import numpy as np
+import tonic
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, Dataset, Subset
+
+from src.common import DatasetMetadata, FilterResult, SlicingConfig
+from src.data.augmentation import apply_train_augmentation
+from src.data.event_io import EVENT_X, EVENT_Y, normalize_events
+from src.data.noise_injection import inject_ba_noise, inject_mixed_noise, inject_shot_noise
+from src.data.slicing import sample_duration_us, select_time_bin_us
+from src.utils.seed import make_generator, seed_worker
+from src.utils.serialization import load_json, save_json
+
+
+DATASET_REGISTRY = {
+    "nmnist": {
+        "class": tonic.datasets.NMNIST,
+        "sensor_size": tonic.datasets.NMNIST.sensor_size,
+        "num_classes": 10,
+        "official_split": True,
+        "pretty_name": "N-MNIST",
+    },
+    "dvsgesture": {
+        "class": tonic.datasets.DVSGesture,
+        "sensor_size": tonic.datasets.DVSGesture.sensor_size,
+        "num_classes": 11,
+        "official_split": True,
+        "pretty_name": "DVS128 Gesture",
+    },
+    "ncaltech101": {
+        "class": tonic.datasets.NCALTECH101,
+        "sensor_size": (240, 180, 2),
+        "num_classes": 101,
+        "official_split": False,
+        "pretty_name": "N-Caltech101",
+        "resize_to": (128, 128),
+    },
+    "cifar10dvs": {
+        "class": tonic.datasets.CIFAR10DVS,
+        "sensor_size": tonic.datasets.CIFAR10DVS.sensor_size,
+        "num_classes": 10,
+        "official_split": False,
+        "pretty_name": "CIFAR10-DVS",
+    },
+}
+
+EventEncoding: TypeAlias = np.ndarray | FilterResult
+EventEncoder: TypeAlias = Callable[[np.ndarray], EventEncoding]
+Tensorizer: TypeAlias = Callable[[EventEncoding], "torch.Tensor"]
+
+
+@dataclass(frozen=True)
+class DatasetBundle:
+    metadata: DatasetMetadata
+    train_raw: Dataset
+    val_raw: Dataset
+    test_raw: Dataset
+    slicing: SlicingConfig
+
+
+class NormalizedEventDataset(Dataset):
+    def __init__(self, base_dataset: Dataset, sensor_size: tuple[int, int, int], resize_to: tuple[int, int] | None = None):
+        self.base_dataset = base_dataset
+        self.sensor_size = sensor_size
+        self.resize_to = resize_to
+
+    def __len__(self) -> int:
+        return len(self.base_dataset)
+
+    def __getitem__(self, index: int) -> tuple[np.ndarray, int]:
+        events, label = self.base_dataset[index]
+        normalized = normalize_events(events)
+        if self.resize_to is not None:
+            normalized = resize_events_with_padding(normalized, self.sensor_size, self.resize_to)
+        return normalized, int(label)
+
+
+class EncodedEventDataset(Dataset):
+    def __init__(
+        self,
+        base_dataset: Dataset,
+        encoder: EventEncoder,
+        tensorizer: Tensorizer,
+        sensor_size: tuple[int, int, int],
+        dataset_name: str,
+        time_bin_us: int,
+        train_mode: bool,
+        seed: int,
+    ):
+        self.base_dataset = base_dataset
+        self.encoder = encoder
+        self.tensorizer = tensorizer
+        self.sensor_size = sensor_size
+        self.dataset_name = dataset_name
+        self.time_bin_us = time_bin_us
+        self.train_mode = train_mode
+        self.seed = seed
+
+    def __len__(self) -> int:
+        return len(self.base_dataset)
+
+    def __getitem__(self, index: int):
+        events, label = self.base_dataset[index]
+        if self.train_mode:
+            rng = np.random.default_rng(self.seed + index * 9973)
+            events = apply_train_augmentation(
+                events=events,
+                sensor_size=self.sensor_size,
+                dataset_name=self.dataset_name,
+                time_bin_us=self.time_bin_us,
+                rng=rng,
+            )
+        encoded = self.encoder(events)
+        return self.tensorizer(encoded), int(label)
+
+
+class CorruptedEventDataset(Dataset):
+    _SOURCE_OFFSETS = {
+        "ba": 13,
+        "shot": 17,
+        "mixed": 19,
+    }
+
+    def __init__(
+        self,
+        base_dataset: Dataset,
+        sensor_size: tuple[int, int, int],
+        source: str,
+        ratio: float,
+        tau_pair_us: int,
+        seed: int,
+    ):
+        if source not in self._SOURCE_OFFSETS:
+            raise KeyError(f"Unsupported corruption source: {source}")
+        self.base_dataset = base_dataset
+        self.sensor_size = sensor_size
+        self.source = source
+        self.ratio = ratio
+        self.tau_pair_us = tau_pair_us
+        self.seed = seed
+
+    def __len__(self) -> int:
+        return len(self.base_dataset)
+
+    def _sample_seed(self, index: int) -> int:
+        return self.seed + index * self._SOURCE_OFFSETS[self.source]
+
+    def __getitem__(self, index: int) -> tuple[np.ndarray, int]:
+        events, label = self.base_dataset[index]
+        sample_seed = self._sample_seed(index)
+        if self.source == "ba":
+            corrupted = inject_ba_noise(events, self.sensor_size, ratio=self.ratio, seed=sample_seed)
+        elif self.source == "shot":
+            corrupted = inject_shot_noise(
+                events,
+                self.sensor_size,
+                ratio=self.ratio,
+                tau_pair_us=self.tau_pair_us,
+                seed=sample_seed,
+            )
+        else:
+            corrupted = inject_mixed_noise(
+                events,
+                self.sensor_size,
+                ratio=self.ratio,
+                tau_pair_us=self.tau_pair_us,
+                seed=sample_seed,
+            )
+        return corrupted.events, int(label)
+
+
+def resize_events_with_padding(
+    events: np.ndarray,
+    sensor_size: tuple[int, int, int],
+    target_size: tuple[int, int],
+) -> np.ndarray:
+    if len(events) == 0:
+        return events
+    src_w, src_h, _ = sensor_size
+    dst_w, dst_h = target_size
+    scale = min(dst_w / src_w, dst_h / src_h)
+    scaled_w = src_w * scale
+    scaled_h = src_h * scale
+    offset_x = (dst_w - scaled_w) / 2.0
+    offset_y = (dst_h - scaled_h) / 2.0
+
+    resized = events.copy()
+    resized[:, EVENT_X] = np.rint(resized[:, EVENT_X] * scale + offset_x).astype(np.int64)
+    resized[:, EVENT_Y] = np.rint(resized[:, EVENT_Y] * scale + offset_y).astype(np.int64)
+    resized[:, EVENT_X] = np.clip(resized[:, EVENT_X], 0, dst_w - 1)
+    resized[:, EVENT_Y] = np.clip(resized[:, EVENT_Y], 0, dst_h - 1)
+    return resized
+
+
+def _split_cache_path(dataset_name: str, split_seed: int, root: Path) -> Path:
+    return root / "results" / "splits" / f"{dataset_name}_seed{split_seed}.json"
+
+
+def _extract_labels(dataset: Dataset) -> np.ndarray:
+    labels = [int(dataset[index][1]) for index in range(len(dataset))]
+    return np.asarray(labels, dtype=np.int64)
+
+
+def _materialize_split_indices(
+    dataset_name: str,
+    labels: np.ndarray,
+    split_seed: int,
+    root: Path,
+    official_train_len: int | None = None,
+) -> dict[str, list[int]]:
+    cache_path = _split_cache_path(dataset_name, split_seed, root)
+    if cache_path.exists():
+        return load_json(cache_path)
+
+    indices = np.arange(len(labels))
+    if official_train_len is not None:
+        train_indices = indices[:official_train_len]
+        test_indices = indices[official_train_len:]
+        train_labels = labels[train_indices]
+        split_train, split_val = train_test_split(
+            train_indices,
+            test_size=0.1,
+            random_state=split_seed,
+            stratify=train_labels,
+        )
+        payload = {
+            "train": split_train.tolist(),
+            "val": split_val.tolist(),
+            "test": test_indices.tolist(),
+        }
+    else:
+        train_val_indices, test_indices, train_val_labels, _ = train_test_split(
+            indices,
+            labels,
+            test_size=0.1,
+            random_state=split_seed,
+            stratify=labels,
+        )
+        train_indices, val_indices = train_test_split(
+            train_val_indices,
+            test_size=1.0 / 9.0,
+            random_state=split_seed,
+            stratify=train_val_labels,
+        )
+        payload = {
+            "train": train_indices.tolist(),
+            "val": val_indices.tolist(),
+            "test": test_indices.tolist(),
+        }
+    save_json(cache_path, payload)
+    return payload
+
+
+def _build_raw_datasets(dataset_name: str, root: Path) -> tuple[Dataset, Dataset | None]:
+    spec = DATASET_REGISTRY[dataset_name]
+    dataset_class = spec["class"]
+    dataset_root = root / "dataset"
+    dataset_root.mkdir(parents=True, exist_ok=True)
+    if spec["official_split"]:
+        train_raw = dataset_class(save_to=dataset_root, train=True)
+        test_raw = dataset_class(save_to=dataset_root, train=False)
+        return train_raw, test_raw
+    return dataset_class(save_to=dataset_root), None
+
+
+def _normalized_dataset(
+    base_dataset: Dataset,
+    sensor_size: tuple[int, int, int],
+    resize_to: tuple[int, int] | None,
+) -> NormalizedEventDataset:
+    return NormalizedEventDataset(
+        base_dataset=base_dataset,
+        sensor_size=sensor_size,
+        resize_to=resize_to,
+    )
+
+
+def _apply_split(dataset: Dataset, split_payload: dict[str, list[int]]) -> tuple[Subset, Subset, Subset]:
+    return (
+        Subset(dataset, split_payload["train"]),
+        Subset(dataset, split_payload["val"]),
+        Subset(dataset, split_payload["test"]),
+    )
+
+
+def _metadata_sensor_size(
+    sensor_size: tuple[int, int, int],
+    resize_to: tuple[int, int] | None,
+) -> tuple[int, int, int]:
+    if resize_to is None:
+        return sensor_size
+    return resize_to[0], resize_to[1], sensor_size[2]
+
+
+def prepare_dataset_bundle(dataset_name: str, root: Path, split_seed: int = 2027) -> DatasetBundle:
+    if dataset_name not in DATASET_REGISTRY:
+        raise KeyError(f"Unknown dataset: {dataset_name}")
+
+    spec = DATASET_REGISTRY[dataset_name]
+    raw_train, raw_test = _build_raw_datasets(dataset_name, root)
+    sensor_size = spec["sensor_size"]
+    resize_to = spec.get("resize_to")
+
+    if raw_test is not None:
+        train_labels = _extract_labels(raw_train)
+        split_payload = _materialize_split_indices(
+            dataset_name=dataset_name,
+            labels=np.concatenate([train_labels, _extract_labels(raw_test)]),
+            split_seed=split_seed,
+            root=root,
+            official_train_len=len(raw_train),
+        )
+        full_dataset = _normalized_dataset(_ConcatDataset((raw_train, raw_test)), sensor_size, resize_to)
+        train_raw, val_raw, test_raw = _apply_split(full_dataset, split_payload)
+    else:
+        labels = _extract_labels(raw_train)
+        split_payload = _materialize_split_indices(
+            dataset_name=dataset_name,
+            labels=labels,
+            split_seed=split_seed,
+            root=root,
+        )
+        full_dataset = _normalized_dataset(raw_train, sensor_size, resize_to)
+        train_raw, val_raw, test_raw = _apply_split(full_dataset, split_payload)
+
+    durations = [sample_duration_us(train_raw[index][0]) for index in range(len(train_raw))]
+    slicing = select_time_bin_us(durations)
+    metadata = DatasetMetadata(
+        name=dataset_name,
+        sensor_size=_metadata_sensor_size(sensor_size, resize_to),
+        num_classes=spec["num_classes"],
+        split_policy="official+val" if spec["official_split"] else "stratified_80_10_10",
+        root=root / "dataset",
+        resize_to=resize_to,
+    )
+    return DatasetBundle(
+        metadata=metadata,
+        train_raw=train_raw,
+        val_raw=val_raw,
+        test_raw=test_raw,
+        slicing=slicing,
+    )
+
+
+def make_calibration_subset(dataset: Dataset, seed: int = 2027, fraction: float = 0.1, cap: int = 1000) -> Subset:
+    labels = np.asarray([int(dataset[index][1]) for index in range(len(dataset))], dtype=np.int64)
+    indices = np.arange(len(dataset))
+    target_size = min(max(int(round(len(dataset) * fraction)), 1), cap, len(dataset))
+    if target_size == len(dataset):
+        return Subset(dataset, indices.tolist())
+    selected_indices, _ = train_test_split(
+        indices,
+        test_size=len(dataset) - target_size,
+        random_state=seed,
+        stratify=labels,
+    )
+    return Subset(dataset, selected_indices.tolist())
+
+
+def build_dataloader(
+    dataset: Dataset,
+    batch_size: int,
+    train_mode: bool,
+    seed: int,
+    num_workers: int = 0,
+) -> DataLoader:
+    effective_batch_size = min(batch_size, max(len(dataset), 1))
+    return DataLoader(
+        dataset,
+        batch_size=effective_batch_size,
+        shuffle=train_mode,
+        drop_last=train_mode and len(dataset) >= effective_batch_size and len(dataset) > 1,
+        num_workers=num_workers,
+        worker_init_fn=seed_worker,
+        generator=make_generator(seed),
+    )
+
+
+class _ConcatDataset(Dataset):
+    def __init__(self, datasets: tuple[Dataset, Dataset]):
+        self.datasets = datasets
+        self.offsets = [0, len(datasets[0]), len(datasets[0]) + len(datasets[1])]
+
+    def __len__(self) -> int:
+        return self.offsets[-1]
+
+    def __getitem__(self, index: int):
+        if index < self.offsets[1]:
+            return self.datasets[0][index]
+        return self.datasets[1][index - self.offsets[1]]

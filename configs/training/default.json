@@ -1,0 +1,13 @@
+{
+  "gradient_clip": 1.0,
+  "inference_runs": 100,
+  "inference_warmup": 20,
+  "learning_rate": 0.002,
+  "noise_ratios": [0.5, 1.0, 2.0, 5.0, 10.0],
+  "profile_samples": 200,
+  "seeds": [0, 1, 2],
+  "split_seed": 2027,
+  "warmup_epochs": 10,
+  "weight_decay": 0.0001
+}
+

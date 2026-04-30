@@ -1,0 +1,13 @@
+{
+  "family": "proposed_lowmem",
+  "filter_params": {
+    "delta_t_us": 2000,
+    "k0": 1,
+    "k_high": 2,
+    "tau_ref_dig_us": 1000
+  },
+  "frame_mode": false,
+  "stage_variant": "conf",
+  "uses_confidence": true
+}
+

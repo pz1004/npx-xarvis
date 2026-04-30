@@ -1,0 +1,10 @@
+{
+  "family": "ba",
+  "filter_params": {
+    "delta_t_us": 2000
+  },
+  "frame_mode": false,
+  "stage_variant": "conf",
+  "uses_confidence": false
+}
+

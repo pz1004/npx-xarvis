@@ -1,0 +1,20 @@
+{
+  "family": "proposed_balanced",
+  "filter_params": {
+    "alpha": 0.01,
+    "delta_t_us": 2000,
+    "eps_us": 1,
+    "gamma": 0,
+    "k0": 1,
+    "k_high": 2,
+    "r_max_hz": "auto",
+    "t_recover_us": 1000000,
+    "tau_pair_us": 1000,
+    "tau_ref_dig_us": 1000,
+    "u_hot": 32
+  },
+  "frame_mode": false,
+  "stage_variant": "ref",
+  "uses_confidence": false
+}
+

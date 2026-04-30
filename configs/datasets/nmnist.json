@@ -1,0 +1,6 @@
+{
+  "batch_size": 128,
+  "epochs": 100,
+  "pretty_name": "N-MNIST"
+}
+

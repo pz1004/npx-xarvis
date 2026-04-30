@@ -1,0 +1,8 @@
+{
+  "family": "proposed_lowlat",
+  "filter_params": {},
+  "frame_mode": false,
+  "profile_only": true,
+  "stage_variant": "conf",
+  "uses_confidence": false
+}

@@ -1,0 +1,6 @@
+{
+  "batch_size": 32,
+  "epochs": 150,
+  "pretty_name": "N-Caltech101"
+}
+

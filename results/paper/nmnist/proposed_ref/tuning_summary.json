@@ -1,0 +1,79 @@
+{
+  "dataset": "nmnist",
+  "method": "proposed_ref",
+  "selected": {
+    "candidate_index": 1,
+    "filter_params": {
+      "alpha": 0.01,
+      "delta_t_us": 2000,
+      "eps_us": 1,
+      "gamma": 0,
+      "k0": 1,
+      "k_high": 2,
+      "r_max_hz": 20000.0,
+      "t_recover_us": 1000000,
+      "tau_pair_us": 1000,
+      "tau_ref_dig_us": 1000,
+      "u_hot": 32
+    },
+    "mean_auc": 0.607491181034242,
+    "mean_ekr": 0.8213032341937224
+  },
+  "stage_b_results": [],
+  "top_candidates": [
+    {
+      "candidate_index": 1,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 2000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 1000,
+        "u_hot": 32
+      },
+      "mean_auc": 0.607491181034242,
+      "mean_ekr": 0.8213032341937224
+    },
+    {
+      "candidate_index": 2,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 2000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 2000,
+        "u_hot": 32
+      },
+      "mean_auc": 0.5992417675895765,
+      "mean_ekr": 0.7828717502951622
+    },
+    {
+      "candidate_index": 0,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 2000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32
+      },
+      "mean_auc": 0.5546819056621766,
+      "mean_ekr": 0.9073870107332865
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "dataset": "nmnist",
+  "method": "stcf_rc_snn",
+  "selected": {
+    "candidate_index": 0,
+    "filter_params": {
+      "delta_t_us": 1000
+    },
+    "mean_auc": 0.5385676300653268,
+    "mean_ekr": 0.9513161349097887
+  },
+  "stage_b_results": [],
+  "top_candidates": [
+    {
+      "candidate_index": 0,
+      "filter_params": {
+        "delta_t_us": 1000
+      },
+      "mean_auc": 0.5385676300653268,
+      "mean_ekr": 0.9513161349097887
+    },
+    {
+      "candidate_index": 1,
+      "filter_params": {
+        "delta_t_us": 2000
+      },
+      "mean_auc": 0.5160418696505672,
+      "mean_ekr": 0.983141568628947
+    },
+    {
+      "candidate_index": 2,
+      "filter_params": {
+        "delta_t_us": 5000
+      },
+      "mean_auc": 0.5030582728487248,
+      "mean_ekr": 0.9968961985866229
+    }
+  ]
+}
