@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +24,30 @@ from src.experiments.train_eval import run_training_experiment
 from src.utils.logging import setup_logging
 from src.utils.serialization import save_json
 
+logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Constants: all supported datasets and methods
+# ---------------------------------------------------------------------------
+ALL_DATASETS = ("nmnist", "dvsgesture", "ncaltech101", "cifar10dvs")
+
+ALL_METHODS = (
+    "raw_snn",
+    "frame_snn",
+    "ba_snn",
+    "stcf_rc_snn",
+    "proposed_ref",
+    "proposed_sup",
+    "proposed_pol",
+    "proposed_conf",
+    "proposed_lowmem",
+    "proposed_lowlat",
+)
+
+
+# ---------------------------------------------------------------------------
+# Helper utilities (unchanged from original)
+# ---------------------------------------------------------------------------
 def _mean(values: list[float]) -> float:
     return float(sum(values) / max(len(values), 1))
 
@@ -198,10 +223,159 @@ def evaluate_candidates(
     return ranked
 
 
+# ---------------------------------------------------------------------------
+# Core: run a single (dataset, method) combination and save results
+# ---------------------------------------------------------------------------
+def run_single_combination(
+    *,
+    root: Path,
+    dataset_name: str,
+    method_name: str,
+    seed: int,
+    top_k: int,
+    max_calibration_samples: int | None,
+    max_grid: int | None,
+    skip_stage_b: bool,
+    stage_b_epochs: int | None,
+    stage_b_max_train_samples: int | None,
+    stage_b_max_val_samples: int | None,
+    stage_b_max_test_samples: int | None,
+    force_cpu: bool,
+) -> dict[str, Any]:
+    """Run the full tuning pipeline for one (dataset, method) pair.
+
+    Returns the tuning_summary dict and writes results to disk immediately
+    after completion.
+    """
+    combo_label = f"{dataset_name}+{method_name}"
+    logger.info("=" * 60)
+    logger.info("START  %s", combo_label)
+    logger.info("=" * 60)
+    t0 = time.time()
+
+    training_config = load_training_config(root)
+    method_config = load_method_config(root, method_name)
+    bundle = prepare_dataset_bundle(dataset_name, root, split_seed=training_config["split_seed"])
+
+    # ------------------------------------------------------------------
+    # Stage A: grid-search candidate evaluation
+    # ------------------------------------------------------------------
+    ranked = evaluate_candidates(
+        root=root,
+        dataset_name=dataset_name,
+        method_name=method_name,
+        max_calibration_samples=max_calibration_samples,
+        max_grid=max_grid,
+    )
+    top_candidates = ranked[:top_k]
+
+    # ------------------------------------------------------------------
+    # Stage B (optional): short SNN training for top candidates
+    # ------------------------------------------------------------------
+    stage_b_results: list[dict[str, Any]] = []
+    if not skip_stage_b:
+        for rank, candidate in enumerate(top_candidates):
+            summary = run_training_experiment(
+                root=root,
+                dataset_name=dataset_name,
+                method_name=method_name,
+                seed=seed,
+                filter_params_override=candidate["filter_params"],
+                result_method_name=f"{method_name}__tune_{rank}",
+                run_purpose="tuning_stage_b",
+                epochs_override=stage_b_epochs,
+                max_train_samples=stage_b_max_train_samples,
+                max_val_samples=stage_b_max_val_samples,
+                max_test_samples=stage_b_max_test_samples,
+                force_cpu=force_cpu,
+            )
+            stage_b_results.append(
+                {
+                    "rank": rank,
+                    "filter_params": candidate["filter_params"],
+                    "val_accuracy": summary["val_accuracy"],
+                    "test_accuracy": summary["test_accuracy"],
+                    "end_to_end_latency_sec": summary["end_to_end_latency_sec"],
+                }
+            )
+
+    # ------------------------------------------------------------------
+    # Select best candidate
+    # ------------------------------------------------------------------
+    selected = _select_stage_b_candidate(top_candidates, stage_b_results)
+
+    # ------------------------------------------------------------------
+    # Detailed event-level metrics for the selected candidate
+    # ------------------------------------------------------------------
+    selected_filter_params = selected["filter_params"]
+    _, _, selected_filter_apply = build_method_pipeline(
+        method=method_config,
+        sensor_size=bundle.metadata.sensor_size,
+        slicing_config=bundle.slicing,
+        filter_params=selected_filter_params,
+    )
+    event_metrics = None
+    if selected_filter_apply is not None:
+        calibration_subset = _restrict_subset(
+            make_calibration_subset(bundle.train_raw, seed=training_config["split_seed"]),
+            max_calibration_samples,
+        )
+        event_metrics = _detailed_event_metrics(
+            calibration_subset=calibration_subset,
+            filter_apply=selected_filter_apply,
+            sensor_size=bundle.metadata.sensor_size,
+            noise_ratios=tuple(training_config["noise_ratios"]),
+            tau_pair_us=int(selected_filter_params.get("tau_pair_us", 1000)),
+            split_seed=training_config["split_seed"],
+        )
+
+    # ------------------------------------------------------------------
+    # Build summary and write to disk immediately
+    # ------------------------------------------------------------------
+    elapsed = time.time() - t0
+    tuning_summary: dict[str, Any] = {
+        "dataset": dataset_name,
+        "method": method_name,
+        "top_candidates": top_candidates,
+        "stage_b_results": stage_b_results,
+        "selected": selected,
+        "elapsed_sec": round(elapsed, 2),
+    }
+
+    output_dir = result_dir(root, dataset_name, method_name, seed).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_json(output_dir / "tuning_summary.json", tuning_summary)
+    if event_metrics is not None:
+        save_json(output_dir / "event_metrics.json", event_metrics)
+
+    logger.info("DONE   %s  (%.1f s)  ->  %s", combo_label, elapsed, output_dir)
+    return tuning_summary
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Tune filter hyperparameters with synthetic-noise AUC.")
-    parser.add_argument("--dataset", required=True, choices=("nmnist", "dvsgesture", "ncaltech101", "cifar10dvs"))
-    parser.add_argument("--method", required=True)
+    parser = argparse.ArgumentParser(
+        description="Tune filter hyperparameters with synthetic-noise AUC. "
+        "Supports multiple datasets and methods in a single run.",
+    )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=list(ALL_DATASETS),
+        choices=ALL_DATASETS,
+        metavar="DATASET",
+        help=f"One or more datasets to tune. Default: all ({', '.join(ALL_DATASETS)}).",
+    )
+    parser.add_argument(
+        "--methods",
+        nargs="+",
+        default=list(ALL_METHODS),
+        choices=ALL_METHODS,
+        metavar="METHOD",
+        help=f"One or more methods to tune. Default: all ({', '.join(ALL_METHODS)}).",
+    )
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
@@ -216,82 +390,77 @@ def main() -> None:
     args = parser.parse_args()
 
     setup_logging()
-    training_config = load_training_config(args.root)
-    method_config = load_method_config(args.root, args.method)
-    bundle = prepare_dataset_bundle(args.dataset, args.root, split_seed=training_config["split_seed"])
-    ranked = evaluate_candidates(
-        root=args.root,
-        dataset_name=args.dataset,
-        method_name=args.method,
-        max_calibration_samples=args.max_calibration_samples,
-        max_grid=args.max_grid,
-    )
-    top_candidates = ranked[: args.top_k]
-    stage_b_results: list[dict[str, Any]] = []
 
-    if not args.skip_stage_b:
-        for rank, candidate in enumerate(top_candidates):
-            summary = run_training_experiment(
-                root=args.root,
-                dataset_name=args.dataset,
-                method_name=args.method,
-                seed=args.seed,
-                filter_params_override=candidate["filter_params"],
-                result_method_name=f"{args.method}__tune_{rank}",
-                run_purpose="tuning_stage_b",
-                epochs_override=args.stage_b_epochs,
-                max_train_samples=args.stage_b_max_train_samples,
-                max_val_samples=args.stage_b_max_val_samples,
-                max_test_samples=args.stage_b_max_test_samples,
-                force_cpu=args.force_cpu,
+    datasets: list[str] = args.datasets
+    methods: list[str] = args.methods
+    total_combos = len(datasets) * len(methods)
+
+    logger.info("Tuning plan: %d dataset(s) x %d method(s) = %d combination(s)", len(datasets), len(methods), total_combos)
+    logger.info("  Datasets : %s", ", ".join(datasets))
+    logger.info("  Methods  : %s", ", ".join(methods))
+
+    completed: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+
+    for ds_idx, dataset_name in enumerate(datasets):
+        for mt_idx, method_name in enumerate(methods):
+            combo_num = ds_idx * len(methods) + mt_idx + 1
+            logger.info(
+                "[%d/%d] Running %s + %s ...",
+                combo_num, total_combos, dataset_name, method_name,
             )
-            stage_b_results.append(
-                {
-                    "rank": rank,
-                    "filter_params": candidate["filter_params"],
-                    "val_accuracy": summary["val_accuracy"],
-                    "test_accuracy": summary["test_accuracy"],
-                    "end_to_end_latency_sec": summary["end_to_end_latency_sec"],
-                }
-            )
+            try:
+                summary = run_single_combination(
+                    root=args.root,
+                    dataset_name=dataset_name,
+                    method_name=method_name,
+                    seed=args.seed,
+                    top_k=args.top_k,
+                    max_calibration_samples=args.max_calibration_samples,
+                    max_grid=args.max_grid,
+                    skip_stage_b=args.skip_stage_b,
+                    stage_b_epochs=args.stage_b_epochs,
+                    stage_b_max_train_samples=args.stage_b_max_train_samples,
+                    stage_b_max_val_samples=args.stage_b_max_val_samples,
+                    stage_b_max_test_samples=args.stage_b_max_test_samples,
+                    force_cpu=args.force_cpu,
+                )
+                completed.append(summary)
+            except Exception:
+                logger.exception("FAILED %s + %s", dataset_name, method_name)
+                failed.append({"dataset": dataset_name, "method": method_name})
 
-    selected = _select_stage_b_candidate(top_candidates, stage_b_results)
+    # ------------------------------------------------------------------
+    # Final summary across all combinations
+    # ------------------------------------------------------------------
+    logger.info("=" * 60)
+    logger.info("ALL COMBINATIONS FINISHED")
+    logger.info("  Completed : %d / %d", len(completed), total_combos)
+    logger.info("  Failed    : %d / %d", len(failed), total_combos)
+    if failed:
+        for f in failed:
+            logger.info("    FAILED: %s + %s", f["dataset"], f["method"])
+    logger.info("=" * 60)
 
-    selected_filter_params = selected["filter_params"]
-    _, _, selected_filter_apply = build_method_pipeline(
-        method=method_config,
-        sensor_size=bundle.metadata.sensor_size,
-        slicing_config=bundle.slicing,
-        filter_params=selected_filter_params,
-    )
-    event_metrics = None
-    if selected_filter_apply is not None:
-        calibration_subset = _restrict_subset(
-            make_calibration_subset(bundle.train_raw, seed=training_config["split_seed"]),
-            args.max_calibration_samples,
-        )
-        event_metrics = _detailed_event_metrics(
-            calibration_subset=calibration_subset,
-            filter_apply=selected_filter_apply,
-            sensor_size=bundle.metadata.sensor_size,
-            noise_ratios=tuple(training_config["noise_ratios"]),
-            tau_pair_us=int(selected_filter_params.get("tau_pair_us", 1000)),
-            split_seed=training_config["split_seed"],
-        )
-
-    tuning_summary = {
-        "dataset": args.dataset,
-        "method": args.method,
-        "top_candidates": top_candidates,
-        "stage_b_results": stage_b_results,
-        "selected": selected,
+    # Write a global summary file
+    global_summary = {
+        "total_combinations": total_combos,
+        "completed_count": len(completed),
+        "failed_count": len(failed),
+        "completed": [
+            {"dataset": s["dataset"], "method": s["method"], "elapsed_sec": s.get("elapsed_sec")}
+            for s in completed
+        ],
+        "failed": failed,
     }
-    output_dir = result_dir(args.root, args.dataset, args.method, args.seed).parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-    save_json(output_dir / "tuning_summary.json", tuning_summary)
-    if event_metrics is not None:
-        save_json(output_dir / "event_metrics.json", event_metrics)
-    print(tuning_summary)
+    global_summary_path = args.root / RESULTS_ROOT / "tuning_global_summary.json"
+    global_summary_path.parent.mkdir(parents=True, exist_ok=True)
+    save_json(global_summary_path, global_summary)
+    logger.info("Global summary saved to %s", global_summary_path)
+
+
+# Re-export RESULTS_ROOT for global summary path
+from src.experiments.common import RESULTS_ROOT  # noqa: E402
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, ".")
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
@@ -546,12 +548,21 @@ def run_training_experiment(
     force_cpu: bool = False,
     run_purpose: str | None = None,
 ) -> dict[str, Any]:
+    run_start = time.perf_counter()
     set_seed(seed)
     training_config = load_training_config(root)
     dataset_config = load_dataset_config(root, dataset_name)
     stage1_config = load_stage1_config(root)
     method_config = load_method_config(root, method_name)
     device = resolve_device(force_cpu=force_cpu)
+    LOGGER.info(
+        "Starting training experiment: dataset=%s method=%s seed=%d device=%s cuda_available=%s",
+        dataset_name,
+        method_name,
+        seed,
+        device,
+        torch.cuda.is_available(),
+    )
     resolved_run_purpose = _resolve_run_purpose(
         result_method_name=result_method_name,
         method_config=method_config,
@@ -563,13 +574,26 @@ def run_training_experiment(
         run_purpose=run_purpose,
     )
 
+    LOGGER.info("Preparing dataset bundle: dataset=%s split_seed=%s", dataset_name, training_config["split_seed"])
     bundle = prepare_dataset_bundle(dataset_name, root, split_seed=training_config["split_seed"])
+    LOGGER.info(
+        "Dataset ready: train=%d val=%d test=%d sensor_size=%s slicing=(time_bin_us=%d, t_max=%d)",
+        len(bundle.train_raw),
+        len(bundle.val_raw),
+        len(bundle.test_raw),
+        bundle.metadata.sensor_size,
+        bundle.slicing.time_bin_us,
+        bundle.slicing.t_max,
+    )
+    LOGGER.info("Resolving filter parameters from calibration subset")
     resolved_filter_params, calibration_info = _calibrated_filter_params(
         bundle=bundle,
         method_config=method_config,
         split_seed=training_config["split_seed"],
         filter_params_override=filter_params_override,
     )
+    LOGGER.info("Filter parameters ready: %s", resolved_filter_params)
+    LOGGER.info("Running Stage 1 setup")
     stage1_summary = run_stage1(stage1_config)
     run_metadata = {
         "run_purpose": resolved_run_purpose,
@@ -597,6 +621,7 @@ def run_training_experiment(
     }
 
     if method_config.profile_only:
+        LOGGER.info("Method is profile-only; producing analytical summary")
         return _analytical_lowlat_summary(
             root=root,
             dataset_name=dataset_name,
@@ -616,6 +641,7 @@ def run_training_experiment(
         slicing_config=bundle.slicing,
         filter_params=resolved_filter_params,
     )
+    LOGGER.info("Method pipeline ready: family=%s frame_mode=%s", method_config.family, method_config.frame_mode)
 
     train_raw = subset_dataset(bundle.train_raw, max_train_samples)
     val_raw = subset_dataset(bundle.val_raw, max_val_samples)
@@ -654,6 +680,14 @@ def run_training_experiment(
 
     batch_size = int(dataset_config["batch_size"])
     epochs = int(epochs_override or dataset_config["epochs"])
+    LOGGER.info(
+        "Building dataloaders: batch_size=%d epochs=%d train=%d val=%d test=%d",
+        batch_size,
+        epochs,
+        len(train_dataset),
+        len(val_dataset),
+        len(test_dataset),
+    )
     train_loader, val_loader, test_loader = _build_loaders(
         train_dataset=train_dataset,
         val_dataset=val_dataset,
@@ -664,6 +698,7 @@ def run_training_experiment(
 
     model = _build_model(num_classes=bundle.metadata.num_classes, frame_mode=method_config.frame_mode)
     model.to(device)
+    LOGGER.info("Model initialized on %s: num_classes=%d", device, bundle.metadata.num_classes)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -677,6 +712,7 @@ def run_training_experiment(
     epoch_history: list[dict[str, float]] = []
 
     for epoch in range(epochs):
+        epoch_start = time.perf_counter()
         train_metrics = _train_epoch(
             model=model,
             train_loader=train_loader,
@@ -698,18 +734,31 @@ def run_training_experiment(
         if val_metrics["accuracy"] > best_val_accuracy:
             best_val_accuracy = val_metrics["accuracy"]
             best_state = copy.deepcopy(model.state_dict())
+        LOGGER.info(
+            "Epoch %d/%d complete: train_loss=%.4f val_loss=%.4f val_accuracy=%.4f best_val_accuracy=%.4f elapsed=%.1fs",
+            epoch + 1,
+            epochs,
+            train_metrics["loss"],
+            val_metrics["loss"],
+            val_metrics["accuracy"],
+            best_val_accuracy,
+            time.perf_counter() - epoch_start,
+        )
 
     model.load_state_dict(best_state)
+    LOGGER.info("Training epochs complete. Evaluating best checkpoint on validation and test sets")
     val_metrics = _evaluate_model(model, val_loader, device=device)
     test_metrics = _evaluate_model(model, test_loader, device=device)
     sample_batch = _extract_sample_batch(test_loader)
 
+    LOGGER.info("Measuring preprocessing cost")
     preprocessing_metrics = _measure_preprocessing(
         raw_dataset=test_raw,
         encoder=encoder,
         tensorizer=tensorizer,
         max_samples=int(training_config["profile_samples"]),
     )
+    LOGGER.info("Measuring inference latency")
     inference_latency_sec = _measure_inference_latency(
         model=model,
         sample_batch=sample_batch,
@@ -718,6 +767,7 @@ def run_training_experiment(
         timed=int(training_config["inference_runs"]),
     )
     profile_metrics = _profile_model(model=model, sample_batch=sample_batch, frame_mode=method_config.frame_mode)
+    LOGGER.info("Evaluating robustness suites")
     robustness = _evaluate_robustness(
         model=model,
         raw_dataset=test_raw,
@@ -754,6 +804,13 @@ def run_training_experiment(
 
     output_dir = result_dir(root, dataset_name, result_method_name or method_name, seed)
     _save_run_artifacts(output_dir, model, summary, robustness)
+    LOGGER.info(
+        "Training experiment complete: val_accuracy=%.4f test_accuracy=%.4f elapsed=%.1fs artifacts=%s",
+        summary["val_accuracy"],
+        summary["test_accuracy"],
+        time.perf_counter() - run_start,
+        output_dir,
+    )
     return summary
 
 

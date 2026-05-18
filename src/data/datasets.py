@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeAlias
+from time import perf_counter
+from typing import Any, TypeAlias
 
 import numpy as np
 import tonic
@@ -15,8 +16,16 @@ from src.data.augmentation import apply_train_augmentation
 from src.data.event_io import EVENT_X, EVENT_Y, normalize_events
 from src.data.noise_injection import inject_ba_noise, inject_mixed_noise, inject_shot_noise
 from src.data.slicing import sample_duration_us, select_time_bin_us
+from src.utils.logging import get_logger
 from src.utils.seed import make_generator, seed_worker
 from src.utils.serialization import load_json, save_json
+
+
+LOGGER = get_logger(__name__)
+FIGSHARE_NDOWNLOADER_URL = "https://ndownloader.figshare.com/files"
+DVSGESTURE_TRAIN_DOWNLOAD_URL = f"{FIGSHARE_NDOWNLOADER_URL}/38022171"
+DVSGESTURE_TEST_DOWNLOAD_URL = f"{FIGSHARE_NDOWNLOADER_URL}/38020584"
+CIFAR10DVS_DOWNLOAD_URL = f"{FIGSHARE_NDOWNLOADER_URL}/38023437"
 
 
 DATASET_REGISTRY = {
@@ -29,6 +38,10 @@ DATASET_REGISTRY = {
     },
     "dvsgesture": {
         "class": tonic.datasets.DVSGesture,
+        "class_url_overrides": {
+            "train_url": DVSGESTURE_TRAIN_DOWNLOAD_URL,
+            "test_url": DVSGESTURE_TEST_DOWNLOAD_URL,
+        },
         "sensor_size": tonic.datasets.DVSGesture.sensor_size,
         "num_classes": 11,
         "official_split": True,
@@ -41,9 +54,13 @@ DATASET_REGISTRY = {
         "official_split": False,
         "pretty_name": "N-Caltech101",
         "resize_to": (128, 128),
+        "map_targets": True,
     },
     "cifar10dvs": {
         "class": tonic.datasets.CIFAR10DVS,
+        "class_url_overrides": {
+            "url": CIFAR10DVS_DOWNLOAD_URL,
+        },
         "sensor_size": tonic.datasets.CIFAR10DVS.sensor_size,
         "num_classes": 10,
         "official_split": False,
@@ -176,6 +193,27 @@ class CorruptedEventDataset(Dataset):
         return corrupted.events, int(label)
 
 
+class TargetMappedDataset(Dataset):
+    def __init__(
+        self,
+        base_dataset: Dataset,
+        indices: list[int],
+        target_to_index: dict[Any, int],
+    ):
+        self.base_dataset = base_dataset
+        self.indices = indices
+        self.target_to_index = target_to_index
+        self.targets = [target_to_index[_target_at_index(base_dataset, index)] for index in indices]
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, index: int):
+        base_index = self.indices[index]
+        events, target = self.base_dataset[base_index]
+        return events, self.target_to_index[target]
+
+
 def resize_events_with_padding(
     events: np.ndarray,
     sensor_size: tuple[int, int, int],
@@ -203,9 +241,44 @@ def _split_cache_path(dataset_name: str, split_seed: int, root: Path) -> Path:
     return root / "results" / "splits" / f"{dataset_name}_seed{split_seed}.json"
 
 
+def _target_at_index(dataset: Dataset, index: int) -> Any:
+    if isinstance(dataset, Subset):
+        return _target_at_index(dataset.dataset, int(dataset.indices[index]))
+    if isinstance(dataset, NormalizedEventDataset):
+        return _target_at_index(dataset.base_dataset, index)
+    if isinstance(dataset, _ConcatDataset):
+        if index < dataset.offsets[1]:
+            return _target_at_index(dataset.datasets[0], index)
+        return _target_at_index(dataset.datasets[1], index - dataset.offsets[1])
+    targets = getattr(dataset, "targets", None)
+    if targets is not None:
+        return targets[index]
+    return dataset[index][1]
+
+
 def _extract_labels(dataset: Dataset) -> np.ndarray:
-    labels = [int(dataset[index][1]) for index in range(len(dataset))]
+    labels = [int(_target_at_index(dataset, index)) for index in range(len(dataset))]
     return np.asarray(labels, dtype=np.int64)
+
+
+def _apply_target_policy(dataset: Dataset, spec: dict[str, Any]) -> Dataset:
+    excluded_targets = set(spec.get("exclude_targets", ()))
+    if not excluded_targets and not spec.get("map_targets", False):
+        return dataset
+
+    raw_targets = [_target_at_index(dataset, index) for index in range(len(dataset))]
+    included_targets = [target for target in raw_targets if target not in excluded_targets]
+    target_to_index = {target: index for index, target in enumerate(sorted(set(included_targets)))}
+
+    expected_num_classes = spec["num_classes"]
+    if len(target_to_index) != expected_num_classes:
+        raise ValueError(
+            f"Expected {expected_num_classes} classes after target mapping, "
+            f"found {len(target_to_index)}."
+        )
+
+    indices = [index for index, target in enumerate(raw_targets) if target not in excluded_targets]
+    return TargetMappedDataset(dataset, indices, target_to_index)
 
 
 def _materialize_split_indices(
@@ -261,13 +334,18 @@ def _materialize_split_indices(
 def _build_raw_datasets(dataset_name: str, root: Path) -> tuple[Dataset, Dataset | None]:
     spec = DATASET_REGISTRY[dataset_name]
     dataset_class = spec["class"]
+    # Tonic 1.6.0 uses figshare.com/ndownloader for some datasets, which can
+    # return an empty AWS WAF challenge response to urllib. Figshare's API
+    # reports these direct ndownloader URLs for the same files and checksums.
+    for attr_name, download_url in spec.get("class_url_overrides", {}).items():
+        setattr(dataset_class, attr_name, download_url)
     dataset_root = root / "dataset"
     dataset_root.mkdir(parents=True, exist_ok=True)
     if spec["official_split"]:
-        train_raw = dataset_class(save_to=dataset_root, train=True)
-        test_raw = dataset_class(save_to=dataset_root, train=False)
+        train_raw = _apply_target_policy(dataset_class(save_to=dataset_root, train=True), spec)
+        test_raw = _apply_target_policy(dataset_class(save_to=dataset_root, train=False), spec)
         return train_raw, test_raw
-    return dataset_class(save_to=dataset_root), None
+    return _apply_target_policy(dataset_class(save_to=dataset_root), spec), None
 
 
 def _normalized_dataset(
@@ -303,13 +381,22 @@ def prepare_dataset_bundle(dataset_name: str, root: Path, split_seed: int = 2027
     if dataset_name not in DATASET_REGISTRY:
         raise KeyError(f"Unknown dataset: {dataset_name}")
 
+    bundle_start = perf_counter()
     spec = DATASET_REGISTRY[dataset_name]
+    LOGGER.info("Building raw datasets: dataset=%s", dataset_name)
     raw_train, raw_test = _build_raw_datasets(dataset_name, root)
     sensor_size = spec["sensor_size"]
     resize_to = spec.get("resize_to")
+    LOGGER.info(
+        "Raw datasets ready: dataset=%s train=%d test=%s",
+        dataset_name,
+        len(raw_train),
+        "none" if raw_test is None else len(raw_test),
+    )
 
     if raw_test is not None:
         train_labels = _extract_labels(raw_train)
+        LOGGER.info("Materializing official split indices: dataset=%s", dataset_name)
         split_payload = _materialize_split_indices(
             dataset_name=dataset_name,
             labels=np.concatenate([train_labels, _extract_labels(raw_test)]),
@@ -321,6 +408,7 @@ def prepare_dataset_bundle(dataset_name: str, root: Path, split_seed: int = 2027
         train_raw, val_raw, test_raw = _apply_split(full_dataset, split_payload)
     else:
         labels = _extract_labels(raw_train)
+        LOGGER.info("Materializing stratified split indices: dataset=%s", dataset_name)
         split_payload = _materialize_split_indices(
             dataset_name=dataset_name,
             labels=labels,
@@ -330,7 +418,20 @@ def prepare_dataset_bundle(dataset_name: str, root: Path, split_seed: int = 2027
         full_dataset = _normalized_dataset(raw_train, sensor_size, resize_to)
         train_raw, val_raw, test_raw = _apply_split(full_dataset, split_payload)
 
-    durations = [sample_duration_us(train_raw[index][0]) for index in range(len(train_raw))]
+    LOGGER.info("Computing slicing durations: dataset=%s train_samples=%d", dataset_name, len(train_raw))
+    durations: list[int] = []
+    duration_start = perf_counter()
+    duration_log_interval = max(1, len(train_raw) // 10)
+    for index in range(len(train_raw)):
+        durations.append(sample_duration_us(train_raw[index][0]))
+        if (index + 1) % duration_log_interval == 0 or index + 1 == len(train_raw):
+            LOGGER.info(
+                "Slicing duration scan: dataset=%s sample=%d/%d elapsed=%.1fs",
+                dataset_name,
+                index + 1,
+                len(train_raw),
+                perf_counter() - duration_start,
+            )
     slicing = select_time_bin_us(durations)
     metadata = DatasetMetadata(
         name=dataset_name,
@@ -339,6 +440,16 @@ def prepare_dataset_bundle(dataset_name: str, root: Path, split_seed: int = 2027
         split_policy="official+val" if spec["official_split"] else "stratified_80_10_10",
         root=root / "dataset",
         resize_to=resize_to,
+    )
+    LOGGER.info(
+        "Dataset bundle complete: dataset=%s train=%d val=%d test=%d slicing=(time_bin_us=%d, t_max=%d) elapsed=%.1fs",
+        dataset_name,
+        len(train_raw),
+        len(val_raw),
+        len(test_raw),
+        slicing.time_bin_us,
+        slicing.t_max,
+        perf_counter() - bundle_start,
     )
     return DatasetBundle(
         metadata=metadata,
@@ -350,7 +461,7 @@ def prepare_dataset_bundle(dataset_name: str, root: Path, split_seed: int = 2027
 
 
 def make_calibration_subset(dataset: Dataset, seed: int = 2027, fraction: float = 0.1, cap: int = 1000) -> Subset:
-    labels = np.asarray([int(dataset[index][1]) for index in range(len(dataset))], dtype=np.int64)
+    labels = _extract_labels(dataset)
     indices = np.arange(len(dataset))
     target_size = min(max(int(round(len(dataset) * fraction)), 1), cap, len(dataset))
     if target_size == len(dataset):

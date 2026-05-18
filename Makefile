@@ -1,6 +1,8 @@
 XARVIS_HOME=$(CURDIR)
 include ${XARVIS_HOME}/rvx_config.mh
 
+PYTHON3_CMD ?= python3
+
 include ./rvx_init.mh
 
 config:
@@ -37,28 +39,28 @@ endif
 install: install_verified
 
 install_original:
-	${PYTHON3_CMD} -m pip install tqdm tonic
+	${PYTHON3_CMD} -m pip install tqdm tonic aedat
 	${PYTHON3_CMD} -m pip install torch==1.12.1+cpu torchvision==0.13.1+cpu torchaudio==0.12.1 --extra-index-url https://download.pytorch.org/whl/cpu
 	${PYTHON3_CMD} -m pip install snntorch
 
 install_verified:
-	${PYTHON3_CMD} -m pip install tqdm==4.67.1 tonic==1.6.0
+	${PYTHON3_CMD} -m pip install tqdm==4.67.1 tonic==1.6.0 aedat==2.2.0
 	${PYTHON3_CMD} -m pip install torch==2.4.1+cpu torchvision==0.19.1+cpu torchaudio==2.4.1 --extra-index-url https://download.pytorch.org/whl/cpu
 	${PYTHON3_CMD} -m pip install snntorch==0.9.1
 
 install_recent:
-	${PYTHON3_CMD} -m pip install --upgrade tqdm tonic
+	${PYTHON3_CMD} -m pip install --upgrade tqdm tonic aedat
 	${PYTHON3_CMD} -m pip install --upgrade torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
 	${PYTHON3_CMD} -m pip install --upgrade snntorch
 
 install-paper:
-	${PYTHON3_CMD} -m pip install snntorch tonic pandas scikit-learn matplotlib seaborn psutil
+	${PYTHON3_CMD} -m pip install snntorch tonic aedat pandas scikit-learn matplotlib seaborn psutil
 
 train-paper:
 	${PYTHON3_CMD} -m src.experiments.train_eval --dataset ${DATASET} --method ${METHOD} --seed ${SEED}
 
 tune-paper:
-	${PYTHON3_CMD} -m src.experiments.tune_filters --dataset ${DATASET} --method ${METHOD}
+	${PYTHON3_CMD} -m src.experiments.tune_filters --datasets ${DATASETS} --methods ${METHODS}
 
 aggregate-paper:
 	${PYTHON3_CMD} -m src.experiments.aggregate_results --regen-roc --roc-dataset ${DATASET}

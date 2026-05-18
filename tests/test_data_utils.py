@@ -5,7 +5,17 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from src.data.datasets import _materialize_split_indices, resize_events_with_padding
+from src.data.datasets import (
+    CIFAR10DVS_DOWNLOAD_URL,
+    DATASET_REGISTRY,
+    DVSGESTURE_TEST_DOWNLOAD_URL,
+    DVSGESTURE_TRAIN_DOWNLOAD_URL,
+    _apply_target_policy,
+    _build_raw_datasets,
+    _extract_labels,
+    _materialize_split_indices,
+    resize_events_with_padding,
+)
 from src.data.event_io import EVENT_T, normalize_events
 from src.data.noise_injection import generate_shot_noise, inject_ba_noise, inject_mixed_noise, inject_shot_noise
 from src.data.slicing import select_time_bin_us
@@ -69,6 +79,78 @@ def test_materialized_split_indices_are_deterministic(tmp_path: Path) -> None:
     second = _materialize_split_indices("toyset", labels, split_seed=2027, root=tmp_path)
     assert first == second
     assert len(first["train"]) + len(first["val"]) + len(first["test"]) == len(labels)
+
+
+def test_cifar10dvs_download_url_is_patched_before_instantiation(monkeypatch, tmp_path: Path) -> None:
+    spec = DATASET_REGISTRY["cifar10dvs"]
+    dataset_class = spec["class"]
+    original_url = dataset_class.url
+
+    class FakeCIFAR10DVS:
+        sensor_size = dataset_class.sensor_size
+        url = original_url
+
+        def __init__(self, save_to: Path):
+            self.save_to = save_to
+            self.url_at_init = self.__class__.url
+
+    monkeypatch.setitem(spec, "class", FakeCIFAR10DVS)
+    try:
+        raw_train, raw_test = _build_raw_datasets("cifar10dvs", tmp_path)
+    finally:
+        monkeypatch.setitem(spec, "class", dataset_class)
+
+    assert raw_test is None
+    assert raw_train.url_at_init == CIFAR10DVS_DOWNLOAD_URL
+
+
+def test_dvsgesture_download_urls_are_patched_before_instantiation(monkeypatch, tmp_path: Path) -> None:
+    spec = DATASET_REGISTRY["dvsgesture"]
+    dataset_class = spec["class"]
+
+    class FakeDVSGesture:
+        sensor_size = dataset_class.sensor_size
+        train_url = dataset_class.train_url
+        test_url = dataset_class.test_url
+
+        def __init__(self, save_to: Path, train: bool = True):
+            self.save_to = save_to
+            self.train = train
+            self.url_at_init = self.__class__.train_url if train else self.__class__.test_url
+
+    monkeypatch.setitem(spec, "class", FakeDVSGesture)
+    try:
+        raw_train, raw_test = _build_raw_datasets("dvsgesture", tmp_path)
+    finally:
+        monkeypatch.setitem(spec, "class", dataset_class)
+
+    assert raw_train.url_at_init == DVSGESTURE_TRAIN_DOWNLOAD_URL
+    assert raw_test.url_at_init == DVSGESTURE_TEST_DOWNLOAD_URL
+
+
+def test_target_policy_maps_string_labels_to_stable_integer_labels() -> None:
+    class ToyStringLabelDataset:
+        targets = ["BACKGROUND_Google", "class_b", "class_a", "class_b"]
+
+        def __len__(self) -> int:
+            return len(self.targets)
+
+        def __getitem__(self, index: int):
+            return np.empty((0, 4), dtype=np.int64), self.targets[index]
+
+    mapped = _apply_target_policy(
+        ToyStringLabelDataset(),
+        {
+            "num_classes": 3,
+            "map_targets": True,
+        },
+    )
+
+    assert len(mapped) == 4
+    assert mapped.targets == [0, 2, 1, 2]
+    assert _extract_labels(mapped).tolist() == [0, 2, 1, 2]
+    assert mapped[0][1] == 0
+    assert mapped[1][1] == 2
 
 
 def test_noise_injection_preserves_exact_signal_labels_and_metrics() -> None:
