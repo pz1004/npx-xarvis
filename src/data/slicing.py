@@ -28,6 +28,13 @@ def select_time_bin_us(
     candidates: tuple[int, ...] = (1000, 2000, 5000),
     max_slices: int = 300,
 ) -> SlicingConfig:
+    if max_slices <= 0:
+        raise ValueError("max_slices must be positive")
+    if not candidates:
+        raise ValueError("At least one candidate time bin is required")
+    if any(candidate <= 0 for candidate in candidates):
+        raise ValueError("Candidate time bins must be positive")
+
     if len(durations_us) == 0:
         return SlicingConfig(time_bin_us=candidates[0], t_max=1)
     durations = np.asarray(durations_us, dtype=np.int64)
@@ -36,7 +43,13 @@ def select_time_bin_us(
         t_max = max(1, int(math.ceil(p99_duration / candidate)))
         if t_max <= max_slices:
             return SlicingConfig(time_bin_us=candidate, t_max=t_max)
-    final_candidate = candidates[-1]
+
+    # Long recordings such as DVS128 Gesture can exceed the fixed candidate
+    # range. Keep the protocol's slice cap by moving to the next coarser
+    # millisecond-aligned bin instead of returning thousands of dense slices.
+    granularity_us = min(candidates)
+    required_bin_us = max(1, int(math.ceil(p99_duration / max_slices)))
+    final_candidate = int(math.ceil(required_bin_us / granularity_us) * granularity_us)
     return SlicingConfig(
         time_bin_us=final_candidate,
         t_max=max(1, int(math.ceil(p99_duration / final_candidate))),

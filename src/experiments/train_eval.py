@@ -56,10 +56,37 @@ from src.utils.serialization import save_json
 LOGGER = get_logger(__name__)
 ROBUSTNESS_SOURCES = ("ba", "shot", "mixed")
 ROBUSTNESS_BASE_SEED = 100_000
+DENSE_INPUT_BUDGET_CHANNELS = 4
+FLOAT32_BYTES = 4
+DEFAULT_CUDA_DENSE_BATCH_BYTES = 256 * 1024 * 1024
 
 
 def _transpose_batch(batch: torch.Tensor) -> torch.Tensor:
     return batch.permute(1, 0, 2, 3, 4).contiguous()
+
+
+def _dense_sample_bytes(
+    sensor_size: tuple[int, int, int],
+    t_max: int,
+    channels: int = DENSE_INPUT_BUDGET_CHANNELS,
+) -> int:
+    width, height, _ = sensor_size
+    return int(max(t_max, 1) * channels * height * width * FLOAT32_BYTES)
+
+
+def _cap_batch_size_for_dense_input(
+    configured_batch_size: int,
+    sensor_size: tuple[int, int, int],
+    t_max: int,
+    max_batch_bytes: int,
+) -> int:
+    if configured_batch_size <= 0:
+        raise ValueError("Configured batch_size must be positive")
+    if max_batch_bytes <= 0:
+        return configured_batch_size
+    sample_bytes = _dense_sample_bytes(sensor_size=sensor_size, t_max=t_max)
+    max_by_input = max(1, max_batch_bytes // max(sample_bytes, 1))
+    return min(configured_batch_size, int(max_by_input))
 
 
 def _build_scheduler(optimizer: torch.optim.Optimizer, total_epochs: int, warmup_epochs: int):
@@ -678,11 +705,43 @@ def run_training_experiment(
         seed=seed,
     )
 
-    batch_size = int(dataset_config["batch_size"])
+    configured_batch_size = int(dataset_config["batch_size"])
+    batch_size = configured_batch_size
+    cuda_dense_batch_budget = None
+    if device.type == "cuda":
+        cuda_dense_batch_budget = int(
+            training_config.get("max_cuda_dense_batch_bytes", DEFAULT_CUDA_DENSE_BATCH_BYTES)
+        )
+        batch_size = _cap_batch_size_for_dense_input(
+            configured_batch_size=configured_batch_size,
+            sensor_size=bundle.metadata.sensor_size,
+            t_max=bundle.slicing.t_max,
+            max_batch_bytes=cuda_dense_batch_budget,
+        )
+        if batch_size < configured_batch_size:
+            sample_bytes = _dense_sample_bytes(
+                sensor_size=bundle.metadata.sensor_size,
+                t_max=bundle.slicing.t_max,
+            )
+            LOGGER.info(
+                "Adjusted CUDA batch_size from %d to %d for dense input budget "
+                "(sample=%.1f MiB budget=%.1f MiB)",
+                configured_batch_size,
+                batch_size,
+                sample_bytes / float(1024**2),
+                cuda_dense_batch_budget / float(1024**2),
+            )
+    run_metadata["batch_size"] = {
+        "configured": configured_batch_size,
+        "effective": batch_size,
+        "cuda_dense_batch_budget_bytes": cuda_dense_batch_budget,
+        "dense_input_budget_channels": DENSE_INPUT_BUDGET_CHANNELS,
+    }
     epochs = int(epochs_override or dataset_config["epochs"])
     LOGGER.info(
-        "Building dataloaders: batch_size=%d epochs=%d train=%d val=%d test=%d",
+        "Building dataloaders: batch_size=%d configured_batch_size=%d epochs=%d train=%d val=%d test=%d",
         batch_size,
+        configured_batch_size,
         epochs,
         len(train_dataset),
         len(val_dataset),

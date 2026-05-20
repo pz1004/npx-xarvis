@@ -17,6 +17,7 @@ from src.data.event_io import (
     EVENT_X,
     EVENT_Y,
     OUTPUT_CONFIDENCE,
+    empty_output_events,
     normalize_events,
 )
 from src.filters._shared import empty_filter_result, output_event_row, stack_output_rows

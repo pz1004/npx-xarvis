@@ -20,7 +20,7 @@ from src.data.event_io import EVENT_T, normalize_events
 from src.data.noise_injection import generate_shot_noise, inject_ba_noise, inject_mixed_noise, inject_shot_noise
 from src.data.slicing import select_time_bin_us
 from src.filters.metrics import evaluate_filter_predictions, state_memory_bytes
-from src.experiments.train_eval import _build_scheduler
+from src.experiments.train_eval import _build_scheduler, _cap_batch_size_for_dense_input, _dense_sample_bytes
 
 
 def _clean_events() -> np.ndarray:
@@ -71,6 +71,34 @@ def test_select_time_bin_uses_p99_rule() -> None:
     assert slicing.time_bin_us == 5000
     assert slicing.t_max <= 300
     assert select_time_bin_us([610_000]).time_bin_us == 5000
+
+
+def test_select_time_bin_falls_back_to_coarser_bin_for_long_recordings() -> None:
+    slicing = select_time_bin_us([12_000_000])
+    assert slicing.time_bin_us == 40_000
+    assert slicing.t_max == 300
+    assert select_time_bin_us([12_001_000]).t_max <= 300
+
+
+def test_dense_batch_cap_keeps_large_snn_inputs_within_budget() -> None:
+    budget_bytes = 256 * 1024 * 1024
+    batch_size = _cap_batch_size_for_dense_input(
+        configured_batch_size=32,
+        sensor_size=(128, 128, 2),
+        t_max=300,
+        max_batch_bytes=budget_bytes,
+    )
+    assert batch_size == 3
+    assert batch_size * _dense_sample_bytes((128, 128, 2), t_max=300) <= budget_bytes
+    assert (
+        _cap_batch_size_for_dense_input(
+            configured_batch_size=128,
+            sensor_size=(34, 34, 2),
+            t_max=100,
+            max_batch_bytes=budget_bytes,
+        )
+        == 128
+    )
 
 
 def test_materialized_split_indices_are_deterministic(tmp_path: Path) -> None:
