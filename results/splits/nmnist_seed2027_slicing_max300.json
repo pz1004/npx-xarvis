@@ -1,0 +1,8 @@
+{
+  "dataset": "nmnist",
+  "max_slices": 300,
+  "split_seed": 2027,
+  "t_max": 157,
+  "time_bin_us": 2000,
+  "train_count": 54000
+}

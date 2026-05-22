@@ -1,0 +1,360 @@
+{
+  "base_seed": 2027,
+  "noise_ratios": [
+    0.5,
+    1.0,
+    2.0,
+    5.0,
+    10.0
+  ],
+  "sources": {
+    "ba": {
+      "mean_auc": 0.5,
+      "mean_ekr": 0.0,
+      "ratios": [
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 0.5,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 1.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 2.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 5.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 10.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        }
+      ]
+    },
+    "mixed": {
+      "mean_auc": 0.5,
+      "mean_ekr": 0.0,
+      "ratios": [
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 0.5,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 1.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 2.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 5.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 10.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        }
+      ]
+    },
+    "shot": {
+      "mean_auc": 0.5,
+      "mean_ekr": 0.0,
+      "ratios": [
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 0.5,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 1.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 2.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 5.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        },
+        {
+          "accepted_events": 0,
+          "auc": 0.5,
+          "compression_ratio": Infinity,
+          "ekr": 0.0,
+          "ratio": 10.0,
+          "roc_points": {
+            "fpr": [
+              0.0,
+              1.0
+            ],
+            "tpr": [
+              0.0,
+              1.0
+            ]
+          },
+          "tpr_at_fpr": {
+            "0.01": 0.0,
+            "0.05": 0.0,
+            "0.1": 0.0
+          }
+        }
+      ]
+    }
+  }
+}

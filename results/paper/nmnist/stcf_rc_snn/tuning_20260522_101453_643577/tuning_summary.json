@@ -1,0 +1,73 @@
+{
+  "dataset": "nmnist",
+  "elapsed_sec": 634.68,
+  "grid_preset": "fast",
+  "method": "stcf_rc_snn",
+  "run_timestamp": "20260522_101453_643577",
+  "selected": {
+    "end_to_end_latency_sec": null,
+    "filter_params": {
+      "delta_t_us": 1000
+    },
+    "rank": 0,
+    "test_accuracy": null,
+    "val_accuracy": 0.427734375
+  },
+  "stage_b_lightweight": true,
+  "stage_b_results": [
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "delta_t_us": 1000
+      },
+      "rank": 0,
+      "test_accuracy": null,
+      "val_accuracy": 0.427734375
+    },
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "delta_t_us": 2000
+      },
+      "rank": 1,
+      "test_accuracy": null,
+      "val_accuracy": 0.3076171875
+    },
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "delta_t_us": 5000
+      },
+      "rank": 2,
+      "test_accuracy": null,
+      "val_accuracy": 0.3330078125
+    }
+  ],
+  "stage_b_skipped": false,
+  "top_candidates": [
+    {
+      "candidate_index": 0,
+      "filter_params": {
+        "delta_t_us": 1000
+      },
+      "mean_auc": 0.5377613566326164,
+      "mean_ekr": 0.9536918912703792
+    },
+    {
+      "candidate_index": 1,
+      "filter_params": {
+        "delta_t_us": 2000
+      },
+      "mean_auc": 0.5153735177039391,
+      "mean_ekr": 0.9842069204275806
+    },
+    {
+      "candidate_index": 2,
+      "filter_params": {
+        "delta_t_us": 5000
+      },
+      "mean_auc": 0.5028893470898564,
+      "mean_ekr": 0.9971143463005622
+    }
+  ]
+}

@@ -11,7 +11,8 @@
     "t_recover_us": 1000000,
     "tau_pair_us": 1000,
     "tau_ref_dig_us": 1000,
-    "u_hot": 32
+    "u_hot": 32,
+    "warmup_us": 5000
   },
   "frame_mode": false,
   "stage_variant": "conf",

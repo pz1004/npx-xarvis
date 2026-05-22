@@ -1,0 +1,17 @@
+{
+  "completed": [
+    {
+      "dataset": "nmnist",
+      "elapsed_sec": 7.21,
+      "method": "proposed_conf"
+    }
+  ],
+  "completed_count": 1,
+  "failed": [],
+  "failed_count": 0,
+  "grid_preset": "fast",
+  "preset": "fast",
+  "run_timestamp": "20260522_132328_538719",
+  "stage_b_lightweight": true,
+  "total_combinations": 1
+}

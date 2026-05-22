@@ -36,6 +36,7 @@ class ProposedBalancedConfig:
     u_hot: int = 32
     t_recover_us: int = 1_000_000
     eps_us: int = 1
+    warmup_us: int = 5_000
     stage_variant: str = "conf"
     stage1_mode: str = "offline_noop"
 
@@ -55,6 +56,9 @@ class ProposedBalancedFilter:
         self.hot = np.zeros((height, width), dtype=bool)
         self.t_acc_pos = np.full((height, width), -10**18, dtype=np.int64)
         self.t_acc_neg = np.full((height, width), -10**18, dtype=np.int64)
+
+    def reset_state(self) -> None:
+        self._init_state()
 
     def _get_state(self):
         return (
@@ -101,6 +105,7 @@ class ProposedBalancedFilter:
         return float(np.clip(estimated, minimum_hz, maximum_hz))
 
     def apply(self, events: np.ndarray) -> FilterResult:
+        self.reset_state()
         events = normalize_events(events)
         if len(events) == 0:
             return empty_filter_result(stats={"accepted_count": 0, "mean_support": 0.0, "score_mode": "proposed"})
@@ -124,6 +129,8 @@ class ProposedBalancedFilter:
                 config.r_max_hz,
                 config.u_hot,
                 config.t_recover_us,
+                config.eps_us,
+                config.warmup_us,
                 config.stage_variant,
                 self.t_raw_last,
                 self.p_raw_last,
@@ -193,9 +200,14 @@ class ProposedBalancedFilter:
                 accepted = False
                 conf = 0
                 support_count = 0
+                warmup_active = config.warmup_us > 0 and t < config.warmup_us
 
                 if not guarded:
-                    if config.stage_variant != "ref":
+                    if config.stage_variant == "ref":
+                        accepted = True
+                    elif warmup_active:
+                        accepted = True
+                    else:
                         support_count = _support_count_jit(
                             x=x,
                             y=y,
@@ -221,8 +233,6 @@ class ProposedBalancedFilter:
 
                         if rate_hz[y, x] > config.r_max_hz and unsupported[y, x] >= config.u_hot:
                             hot[y, x] = True
-                    else:
-                        accepted = True
 
                     if accepted:
                         accepted_mask[idx] = True
@@ -298,6 +308,8 @@ def _apply_filter_jit(
     r_max_hz: float,
     u_hot: int,
     t_recover_us: int,
+    eps_us: int,
+    warmup_us: int,
     stage_variant: str,
     t_raw_last_in: np.ndarray,
     p_raw_last_in: np.ndarray,
@@ -331,7 +343,7 @@ def _apply_filter_jit(
         pair = int((p != p_raw_last[y, x]) and (dt_raw < tau_pair_us))
         pair_flag_arr[idx] = pair
 
-        instant_rate_hz = 1_000_000.0 / max(dt_raw, 1) # eps_us is 1
+        instant_rate_hz = 1_000_000.0 / max(dt_raw, eps_us)
         rate_hz[y, x] = float(alpha * instant_rate_hz + (1.0 - alpha) * rate_hz[y, x])
 
         if hot[y, x] and dt_raw >= t_recover_us:
@@ -343,9 +355,14 @@ def _apply_filter_jit(
         accepted = False
         conf = 0
         support_count = 0
+        warmup_active = warmup_us > 0 and t < warmup_us
 
         if not guarded:
-            if stage_variant != "ref":
+            if stage_variant == "ref":
+                accepted = True
+            elif warmup_active:
+                accepted = True
+            else:
                 support_count = _support_count_jit(
                     x=x,
                     y=y,
@@ -371,8 +388,6 @@ def _apply_filter_jit(
 
                 if rate_hz[y, x] > r_max_hz and unsupported[y, x] >= u_hot:
                     hot[y, x] = True
-            else:
-                accepted = True
 
             if accepted:
                 accepted_mask[idx] = True

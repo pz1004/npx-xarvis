@@ -1,0 +1,143 @@
+{
+  "dataset": "nmnist",
+  "elapsed_sec": 711.96,
+  "grid_preset": "fast",
+  "method": "proposed_conf",
+  "run_timestamp": "20260522_101453_643577",
+  "selected": {
+    "end_to_end_latency_sec": null,
+    "filter_params": {
+      "alpha": 0.01,
+      "delta_t_us": 1000,
+      "eps_us": 1,
+      "gamma": 0,
+      "k0": 1,
+      "k_high": 2,
+      "r_max_hz": 20000.0,
+      "t_recover_us": 1000000,
+      "tau_pair_us": 1000,
+      "tau_ref_dig_us": 500,
+      "u_hot": 32
+    },
+    "rank": 0,
+    "test_accuracy": null,
+    "val_accuracy": 0.091796875
+  },
+  "stage_b_lightweight": true,
+  "stage_b_results": [
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 1000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32
+      },
+      "rank": 0,
+      "test_accuracy": null,
+      "val_accuracy": 0.091796875
+    },
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 1000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 3,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32
+      },
+      "rank": 1,
+      "test_accuracy": null,
+      "val_accuracy": 0.091796875
+    },
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 1000,
+        "eps_us": 1,
+        "gamma": 1,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32
+      },
+      "rank": 2,
+      "test_accuracy": null,
+      "val_accuracy": 0.091796875
+    }
+  ],
+  "stage_b_skipped": false,
+  "top_candidates": [
+    {
+      "candidate_index": 0,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 1000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32
+      },
+      "mean_auc": 0.5,
+      "mean_ekr": 0.0
+    },
+    {
+      "candidate_index": 1,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 1000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 3,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32
+      },
+      "mean_auc": 0.5,
+      "mean_ekr": 0.0
+    },
+    {
+      "candidate_index": 2,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 1000,
+        "eps_us": 1,
+        "gamma": 1,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32
+      },
+      "mean_auc": 0.5,
+      "mean_ekr": 0.0
+    }
+  ]
+}

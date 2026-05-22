@@ -69,16 +69,29 @@ def output_events_to_event_tensor(
 ) -> torch.Tensor:
     width, height, _ = sensor_size
     tensor = np.zeros((slicing.t_max, 4, height, width), dtype=np.float32)
-    for event in output_events:
-        time_bin = int(event[EVENT_T] // slicing.time_bin_us)
-        if time_bin < 0 or time_bin >= slicing.t_max:
-            continue
-        polarity = int(event[EVENT_P])
-        confidence = int(event[OUTPUT_CONFIDENCE])
-        if confidence == 0:
-            continue
-        channel = CONFIDENCE_CHANNELS[(polarity, confidence)]
-        tensor[time_bin, channel, int(event[EVENT_Y]), int(event[EVENT_X])] += 1.0
+    if len(output_events) == 0:
+        return torch.from_numpy(tensor)
+
+    time_bins = output_events[:, EVENT_T] // slicing.time_bin_us
+    confidence = output_events[:, OUTPUT_CONFIDENCE]
+    valid = (time_bins >= 0) & (time_bins < slicing.t_max) & ((confidence == 1) | (confidence == 2))
+    if not np.any(valid):
+        return torch.from_numpy(tensor)
+
+    filtered = output_events[valid]
+    filtered_time_bins = time_bins[valid].astype(np.int64, copy=False)
+    filtered_confidence = filtered[:, OUTPUT_CONFIDENCE].astype(np.int64, copy=False)
+    channels = np.where(filtered[:, EVENT_P] > 0, filtered_confidence - 1, filtered_confidence + 1)
+    np.add.at(
+        tensor,
+        (
+            filtered_time_bins,
+            channels,
+            filtered[:, EVENT_Y].astype(np.int64, copy=False),
+            filtered[:, EVENT_X].astype(np.int64, copy=False),
+        ),
+        1.0,
+    )
     return torch.from_numpy(tensor)
 
 
@@ -89,11 +102,25 @@ def raw_events_to_frame_tensor(
 ) -> torch.Tensor:
     width, height, _ = sensor_size
     tensor = np.zeros((slicing.t_max, 2, height, width), dtype=np.float32)
-    for event in events:
-        time_bin = int(event[EVENT_T] // slicing.time_bin_us)
-        if time_bin < 0 or time_bin >= slicing.t_max:
-            continue
-        channel = FRAME_CHANNELS[int(event[EVENT_P])]
-        tensor[time_bin, channel, int(event[EVENT_Y]), int(event[EVENT_X])] += 1.0
+    if len(events) == 0:
+        return torch.from_numpy(tensor)
+
+    time_bins = events[:, EVENT_T] // slicing.time_bin_us
+    valid = (time_bins >= 0) & (time_bins < slicing.t_max)
+    if not np.any(valid):
+        return torch.from_numpy(tensor)
+
+    filtered = events[valid]
+    channels = np.where(filtered[:, EVENT_P] > 0, 0, 1)
+    np.add.at(
+        tensor,
+        (
+            time_bins[valid].astype(np.int64, copy=False),
+            channels.astype(np.int64, copy=False),
+            filtered[:, EVENT_Y].astype(np.int64, copy=False),
+            filtered[:, EVENT_X].astype(np.int64, copy=False),
+        ),
+        1.0,
+    )
     return torch.from_numpy(tensor)
 

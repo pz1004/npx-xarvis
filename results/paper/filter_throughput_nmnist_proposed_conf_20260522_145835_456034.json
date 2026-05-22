@@ -1,0 +1,49 @@
+{
+  "accepted_event_count": 42256,
+  "accepted_event_ratio": 0.049653765571148735,
+  "dataset": "nmnist",
+  "event_count": 851013,
+  "filter_params": {
+    "alpha": 0.01,
+    "delta_t_us": 5000,
+    "eps_us": 1,
+    "gamma": 1,
+    "k0": 1,
+    "k_high": 2,
+    "r_max_hz": 20000.0,
+    "t_recover_us": 1000000,
+    "tau_pair_us": 1000,
+    "tau_ref_dig_us": 500,
+    "u_hot": 32,
+    "warmup_us": 5000
+  },
+  "filter_params_source": {
+    "latest_tuning_path": "/home/user/Workspaces/npx-xarvis/results/paper/nmnist/proposed_conf/tuning_20260522_132414_362184/tuning_summary.json",
+    "manual_filter_params": false,
+    "use_latest_tuning": true
+  },
+  "hardware": {
+    "cuda_available": true,
+    "cuda_device_name": "NVIDIA A100 80GB PCIe",
+    "device": "cpu"
+  },
+  "mean_latency_sec": 0.00042548614481347614,
+  "median_latency_sec": 0.0004239370027789846,
+  "method": "proposed_conf",
+  "run_timestamp": "20260522_145835_456034",
+  "sample_count": 200,
+  "software_versions": {
+    "matplotlib": "3.10.8",
+    "numpy": "1.26.4",
+    "pandas": "2.3.3",
+    "platform": "Linux-6.8.0-117-generic-x86_64-with-glibc2.35",
+    "python": "3.12.12",
+    "scikit-learn": "1.8.0",
+    "seaborn": "0.13.2",
+    "snntorch": "0.9.4",
+    "tonic": "1.6.0",
+    "torch": "2.12.0"
+  },
+  "throughput_eps": 10000478.398339687,
+  "total_elapsed_sec": 0.08509722896269523
+}

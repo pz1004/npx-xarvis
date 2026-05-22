@@ -1,0 +1,145 @@
+{
+  "accepted_event_ratio": null,
+  "aunc": null,
+  "compression_ratio": null,
+  "confidence_ratio": 1.5020885467529297,
+  "dataset": "nmnist",
+  "dense_macs": 0,
+  "device": "cuda",
+  "end_to_end_latency_sec": null,
+  "epoch_history": [
+    {
+      "epoch": 0,
+      "train_loss": 2.358946591615677,
+      "val_accuracy": 0.140625,
+      "val_loss": 2.594783663749695
+    },
+    {
+      "epoch": 1,
+      "train_loss": 2.2265115454792976,
+      "val_accuracy": 0.138671875,
+      "val_loss": 4.724083781242371
+    },
+    {
+      "epoch": 2,
+      "train_loss": 2.225864678621292,
+      "val_accuracy": 0.14453125,
+      "val_loss": 2.391768664121628
+    },
+    {
+      "epoch": 3,
+      "train_loss": 2.224830187857151,
+      "val_accuracy": 0.126953125,
+      "val_loss": 2.344046711921692
+    },
+    {
+      "epoch": 4,
+      "train_loss": 2.236782968044281,
+      "val_accuracy": 0.1484375,
+      "val_loss": 2.3176795840263367
+    }
+  ],
+  "filter_params": {
+    "alpha": 0.01,
+    "delta_t_us": 5000,
+    "eps_us": 1,
+    "gamma": 0,
+    "k0": 1,
+    "k_high": 2,
+    "r_max_hz": 20000.0,
+    "t_recover_us": 1000000,
+    "tau_pair_us": 1000,
+    "tau_ref_dig_us": 1000,
+    "u_hot": 32,
+    "warmup_us": 5000
+  },
+  "filter_state_memory_bytes": 17340,
+  "inference_latency_sec": null,
+  "method": "proposed_sup",
+  "parameter_count": 33762,
+  "parameter_memory_bytes": 135048,
+  "peak_activation_bytes": 0,
+  "preprocessing_latency_sec": null,
+  "preprocessing_throughput_eps": null,
+  "run_metadata": {
+    "batch_size": {
+      "configured": 128,
+      "cuda_dense_batch_budget_bytes": 268435456,
+      "dense_input_budget_channels": 4,
+      "effective": 128
+    },
+    "calibration_subset": {
+      "cap": 1000,
+      "fraction": 0.1,
+      "seed": 2027,
+      "size": 1000,
+      "strategy": "stratified_fraction"
+    },
+    "corruption_seed_policy": {
+      "event_level_base_seed": 2027,
+      "ratio_stride": 100,
+      "robustness_base_seed": 100000,
+      "source_order": [
+        "ba",
+        "shot",
+        "mixed"
+      ],
+      "source_stride": 1000
+    },
+    "dataloader": {
+      "num_workers": 4,
+      "persistent_workers": true,
+      "pin_memory": true,
+      "prefetch_factor": 2
+    },
+    "effective_epochs": 5,
+    "evaluation": {
+      "save_checkpoint": false,
+      "skip_posthoc_metrics": true,
+      "skip_test_evaluation": true
+    },
+    "filter_params_source": null,
+    "hardware": {
+      "cuda_available": true,
+      "cuda_device_name": "NVIDIA A100 80GB PCIe",
+      "device": "cuda"
+    },
+    "is_protocol_run": false,
+    "max_slices": 80,
+    "output_dir": "/home/user/Workspaces/npx-xarvis/results/paper/nmnist/proposed_sup__tune_1/seed_0__20260522_132414_362184",
+    "run_purpose": "tuning_stage_b",
+    "run_timestamp": "20260522_132414_362184",
+    "sample_caps": {
+      "test": 1024,
+      "train": 4096,
+      "val": 1024
+    },
+    "software_versions": {
+      "matplotlib": "3.10.8",
+      "numpy": "1.26.4",
+      "pandas": "2.3.3",
+      "platform": "Linux-6.8.0-117-generic-x86_64-with-glibc2.35",
+      "python": "3.12.12",
+      "scikit-learn": "1.8.0",
+      "seaborn": "0.13.2",
+      "snntorch": "0.9.4",
+      "tonic": "1.6.0",
+      "torch": "2.12.0"
+    }
+  },
+  "run_timestamp": "20260522_132414_362184",
+  "seed": 0,
+  "sops": 0,
+  "stage1": {
+    "bypassed": true,
+    "calibration_stats": {},
+    "low_light_bias": {},
+    "manifest_name": "default",
+    "mode": "offline_noop",
+    "nominal_bias": {}
+  },
+  "t_max": 63,
+  "test_accuracy": null,
+  "time_bin_us": 5000,
+  "val_accuracy": 0.1484375
+}

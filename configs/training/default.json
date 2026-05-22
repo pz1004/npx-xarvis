@@ -1,5 +1,9 @@
 {
   "gradient_clip": 1.0,
+  "dataloader_num_workers": null,
+  "dataloader_prefetch_factor": 2,
+  "dataloader_persistent_workers": true,
+  "dataloader_pin_memory": true,
   "inference_runs": 100,
   "inference_warmup": 20,
   "learning_rate": 0.002,

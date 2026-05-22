@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from src.experiments.common import result_dir
+from src.experiments.common import latest_result_dir
 from src.experiments.train_eval import run_training_experiment
 from src.utils.logging import setup_logging
 from src.utils.serialization import load_json, save_json
@@ -24,7 +24,7 @@ def main() -> None:
     args = parser.parse_args()
 
     setup_logging()
-    summary_path = result_dir(args.root, args.dataset, args.method, args.seed) / "summary.json"
+    summary_path = latest_result_dir(args.root, args.dataset, args.method, args.seed) / "summary.json"
     if summary_path.exists():
         summary = load_json(summary_path)
     elif args.train_if_missing:
@@ -39,6 +39,7 @@ def main() -> None:
             max_test_samples=args.max_test_samples,
             force_cpu=args.force_cpu,
         )
+        summary_path = Path(summary["run_metadata"]["output_dir"]) / "summary.json"
     else:
         raise FileNotFoundError(f"Missing run summary: {summary_path}")
 

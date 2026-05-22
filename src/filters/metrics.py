@@ -60,6 +60,7 @@ def evaluate_filter_predictions(
     return {
         "auc": roc_auc,
         "ekr": event_keep_ratio(accepted_mask),
+        "esr": event_structural_ratio(y_true, accepted_mask),
         "compression_ratio": compression_ratio(accepted_mask),
         "accepted_events": int(np.sum(accepted_mask)),
         "tpr_at_fpr": tpr_at_fixed_fpr(y_true, scores, (0.01, 0.05, 0.10)),
@@ -71,78 +72,21 @@ def evaluate_filter_predictions(
 
 
 def event_structural_ratio(
-    original_events: np.ndarray,
-    filtered_events: np.ndarray,
-    sensor_size: tuple[int, int, int],
-    time_bin_us: int = 5000,
+    is_signal: np.ndarray,
+    accepted_mask: np.ndarray,
 ) -> float:
-    """Compute Event Structural Ratio (ESR).
+    """Compute label-based Event Structural Ratio (ESR).
 
-    ESR measures how well the filtered event stream preserves the spatial
-    structure of the original event stream. It computes the normalized
-    cross-correlation between spatial histograms of the original and filtered
-    events within temporal bins, then averages over all bins.
-
-    A value of 1.0 indicates perfect structural preservation; lower values
-    indicate loss of spatial structure.
+    In the synthetic-noise protocol, signal/noise labels are known exactly.
+    ESR is therefore the fraction of ground-truth signal events retained by
+    the filter, matching the definition used in the manuscript.
     """
-    if len(original_events) == 0 or len(filtered_events) == 0:
+    y_true = np.asarray(is_signal).astype(bool)
+    accepted = np.asarray(accepted_mask).astype(bool)
+    signal_count = int(np.sum(y_true))
+    if signal_count == 0:
         return 0.0
-
-    width, height, _ = sensor_size
-    n_pixels = width * height
-
-    # Determine time range
-    t_min = min(original_events[:, 2].min(), filtered_events[:, 2].min())
-    t_max_val = max(original_events[:, 2].max(), filtered_events[:, 2].max())
-    duration = t_max_val - t_min
-    if duration <= 0:
-        return 0.0
-
-    n_bins = max(1, int(np.ceil(duration / time_bin_us)))
-    correlations: list[float] = []
-
-    for b in range(n_bins):
-        t_lo = t_min + b * time_bin_us
-        t_hi = t_lo + time_bin_us
-
-        # Original events in this time bin
-        orig_mask = (original_events[:, 2] >= t_lo) & (original_events[:, 2] < t_hi)
-        orig_bin = original_events[orig_mask]
-
-        # Filtered events in this time bin
-        filt_mask = (filtered_events[:, 2] >= t_lo) & (filtered_events[:, 2] < t_hi)
-        filt_bin = filtered_events[filt_mask]
-
-        if len(orig_bin) == 0:
-            continue
-
-        # Spatial histograms
-        orig_hist = np.zeros(n_pixels, dtype=np.float64)
-        filt_hist = np.zeros(n_pixels, dtype=np.float64)
-
-        for ev in orig_bin:
-            px_idx = int(ev[1]) * width + int(ev[0])
-            if 0 <= px_idx < n_pixels:
-                orig_hist[px_idx] += 1.0
-
-        for ev in filt_bin:
-            px_idx = int(ev[1]) * width + int(ev[0])
-            if 0 <= px_idx < n_pixels:
-                filt_hist[px_idx] += 1.0
-
-        # Normalized cross-correlation
-        orig_norm = np.linalg.norm(orig_hist)
-        filt_norm = np.linalg.norm(filt_hist)
-        if orig_norm < 1e-12 or filt_norm < 1e-12:
-            continue
-
-        ncc = float(np.dot(orig_hist, filt_hist) / (orig_norm * filt_norm))
-        correlations.append(ncc)
-
-    if not correlations:
-        return 0.0
-    return float(np.mean(correlations))
+    return float(np.sum(y_true & accepted) / signal_count)
 
 
 def state_memory_bytes(method_name: str, sensor_size: tuple[int, int, int], t_max: int | None = None) -> int:

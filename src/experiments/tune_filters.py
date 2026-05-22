@@ -16,7 +16,8 @@ from src.experiments.common import (
     candidate_param_grid,
     load_method_config,
     load_training_config,
-    result_dir,
+    make_run_timestamp,
+    tuning_result_dir,
 )
 from src.filters.metrics import evaluate_filter_predictions
 from src.experiments.common import filter_score
@@ -43,6 +44,48 @@ ALL_METHODS = (
     "proposed_lowmem",
     "proposed_lowlat",
 )
+
+FAST_DEFAULT_METHODS = (
+    "ba_snn",
+    "stcf_rc_snn",
+    "proposed_ref",
+    "proposed_sup",
+    "proposed_pol",
+    "proposed_conf",
+    "proposed_lowmem",
+)
+
+UNTUNED_SINGLETON_METHODS = {"raw_snn", "frame_snn", "proposed_lowlat"}
+PRESETS = ("fast", "paper", "custom")
+FAST_STAGE_B_DEFAULTS = {
+    "top_k": 3,
+    "max_calibration_samples": 64,
+    "stage_b_epochs": 5,
+    "stage_b_max_train_samples": 4096,
+    "stage_b_max_val_samples": 1024,
+    "stage_b_max_test_samples": 1024,
+    "stage_b_max_slices": 80,
+}
+
+
+def _default_methods_for_preset(preset: str) -> tuple[str, ...]:
+    if preset == "paper":
+        return ALL_METHODS
+    return FAST_DEFAULT_METHODS
+
+
+def _default_for_preset(preset: str, name: str, fallback: int | None = None) -> int | None:
+    if preset == "fast":
+        return FAST_STAGE_B_DEFAULTS[name]
+    return fallback
+
+
+def _stage_b_training_kwargs(lightweight: bool) -> dict[str, Any]:
+    return {
+        "skip_test_evaluation": lightweight,
+        "skip_posthoc_metrics": lightweight,
+        "save_checkpoint": not lightweight,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +114,7 @@ def _detailed_event_metrics(
         ratio_metrics: list[dict[str, Any]] = []
         source_aucs: list[float] = []
         source_ekrs: list[float] = []
+        source_esrs: list[float] = []
         for ratio in noise_ratios:
             y_true_all: list[bool] = []
             score_all: list[float] = []
@@ -98,11 +142,13 @@ def _detailed_event_metrics(
             )
             source_aucs.append(float(metrics["auc"]))
             source_ekrs.append(float(metrics["ekr"]))
+            source_esrs.append(float(metrics["esr"]))
             ratio_metrics.append(
                 {
                     "ratio": ratio,
                     "auc": float(metrics["auc"]),
                     "ekr": float(metrics["ekr"]),
+                    "esr": float(metrics["esr"]),
                     "compression_ratio": float(metrics["compression_ratio"]),
                     "accepted_events": int(metrics["accepted_events"]),
                     "tpr_at_fpr": metrics["tpr_at_fpr"],
@@ -113,11 +159,18 @@ def _detailed_event_metrics(
             "ratios": ratio_metrics,
             "mean_auc": _mean(source_aucs),
             "mean_ekr": _mean(source_ekrs),
+            "mean_esr": _mean(source_esrs),
         }
+    mean_aucs = [float(payload["mean_auc"]) for payload in suite_payload.values()]
+    mean_ekrs = [float(payload["mean_ekr"]) for payload in suite_payload.values()]
+    mean_esrs = [float(payload["mean_esr"]) for payload in suite_payload.values()]
     return {
         "sources": suite_payload,
         "noise_ratios": list(noise_ratios),
         "base_seed": split_seed,
+        "mean_auc": _mean(mean_aucs),
+        "mean_ekr": _mean(mean_ekrs),
+        "mean_esr": _mean(mean_esrs),
     }
 
 
@@ -128,9 +181,10 @@ def _evaluate_candidate_auc(
     noise_ratios: tuple[float, ...],
     tau_pair_us: int,
     split_seed: int,
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
     aucs: list[float] = []
     ekrs: list[float] = []
+    esrs: list[float] = []
     for sample_index in range(len(calibration_subset)):
         events, _ = calibration_subset[sample_index]
         suites = build_noise_suites(
@@ -149,7 +203,8 @@ def _evaluate_candidate_auc(
             )
             aucs.append(float(metrics["auc"]))
             ekrs.append(float(metrics["ekr"]))
-    return _mean(aucs), _mean(ekrs)
+            esrs.append(float(metrics["esr"]))
+    return _mean(aucs), _mean(ekrs), _mean(esrs)
 
 
 def _select_stage_b_candidate(
@@ -167,6 +222,7 @@ def evaluate_candidates(
     method_name: str,
     max_calibration_samples: int | None = None,
     max_grid: int | None = None,
+    grid_preset: str = "paper",
 ) -> list[dict[str, Any]]:
     training_config = load_training_config(root)
     method_config = load_method_config(root, method_name)
@@ -177,7 +233,7 @@ def evaluate_candidates(
     calibration_events = [calibration_subset[index][0] for index in range(len(calibration_subset))]
     base_params = calibration_filter_params(method_config, calibration_events, bundle.metadata.sensor_size)
 
-    candidates = candidate_param_grid(method_name)
+    candidates = candidate_param_grid(method_name, preset=grid_preset)
     if max_grid is not None:
         candidates = candidates[:max_grid]
 
@@ -198,11 +254,12 @@ def evaluate_candidates(
                     "filter_params": resolved,
                     "mean_auc": 0.5,
                     "mean_ekr": 1.0,
+                    "mean_esr": 1.0,
                 }
             )
             continue
 
-        mean_auc, mean_ekr = _evaluate_candidate_auc(
+        mean_auc, mean_ekr, mean_esr = _evaluate_candidate_auc(
             calibration_subset=calibration_subset,
             filter_apply=filter_apply,
             sensor_size=bundle.metadata.sensor_size,
@@ -216,6 +273,7 @@ def evaluate_candidates(
                 "filter_params": resolved,
                 "mean_auc": mean_auc,
                 "mean_ekr": mean_ekr,
+                "mean_esr": mean_esr,
             }
         )
 
@@ -235,12 +293,17 @@ def run_single_combination(
     top_k: int,
     max_calibration_samples: int | None,
     max_grid: int | None,
+    grid_preset: str,
     skip_stage_b: bool,
+    stage_b_lightweight: bool,
+    stage_b_for_untuned: bool,
     stage_b_epochs: int | None,
     stage_b_max_train_samples: int | None,
     stage_b_max_val_samples: int | None,
     stage_b_max_test_samples: int | None,
+    stage_b_max_slices: int | None,
     force_cpu: bool,
+    run_timestamp: str,
 ) -> dict[str, Any]:
     """Run the full tuning pipeline for one (dataset, method) pair.
 
@@ -266,6 +329,7 @@ def run_single_combination(
         method_name=method_name,
         max_calibration_samples=max_calibration_samples,
         max_grid=max_grid,
+        grid_preset=grid_preset,
     )
     top_candidates = ranked[:top_k]
 
@@ -273,7 +337,11 @@ def run_single_combination(
     # Stage B (optional): short SNN training for top candidates
     # ------------------------------------------------------------------
     stage_b_results: list[dict[str, Any]] = []
-    if not skip_stage_b:
+    effective_skip_stage_b = skip_stage_b or (method_name in UNTUNED_SINGLETON_METHODS and not stage_b_for_untuned)
+    if effective_skip_stage_b and method_name in UNTUNED_SINGLETON_METHODS and not skip_stage_b:
+        logger.info("Skipping Stage B for untuned singleton method: %s", method_name)
+    if not effective_skip_stage_b:
+        stage_b_training_kwargs = _stage_b_training_kwargs(stage_b_lightweight)
         for rank, candidate in enumerate(top_candidates):
             summary = run_training_experiment(
                 root=root,
@@ -287,15 +355,21 @@ def run_single_combination(
                 max_train_samples=stage_b_max_train_samples,
                 max_val_samples=stage_b_max_val_samples,
                 max_test_samples=stage_b_max_test_samples,
+                max_slices_override=stage_b_max_slices,
                 force_cpu=force_cpu,
+                run_timestamp=run_timestamp,
+                **stage_b_training_kwargs,
             )
             stage_b_results.append(
                 {
                     "rank": rank,
                     "filter_params": candidate["filter_params"],
+                    "mean_auc": candidate.get("mean_auc"),
+                    "mean_ekr": candidate.get("mean_ekr"),
+                    "mean_esr": candidate.get("mean_esr"),
                     "val_accuracy": summary["val_accuracy"],
-                    "test_accuracy": summary["test_accuracy"],
-                    "end_to_end_latency_sec": summary["end_to_end_latency_sec"],
+                    "test_accuracy": summary.get("test_accuracy"),
+                    "end_to_end_latency_sec": summary.get("end_to_end_latency_sec"),
                 }
             )
 
@@ -339,10 +413,20 @@ def run_single_combination(
         "top_candidates": top_candidates,
         "stage_b_results": stage_b_results,
         "selected": selected,
+        "run_timestamp": run_timestamp,
+        "grid_preset": grid_preset,
+        "stage_b_lightweight": stage_b_lightweight,
+        "stage_b_skipped": effective_skip_stage_b,
         "elapsed_sec": round(elapsed, 2),
     }
+    if event_metrics is not None:
+        tuning_summary["event_metrics_summary"] = {
+            "mean_auc": event_metrics["mean_auc"],
+            "mean_ekr": event_metrics["mean_ekr"],
+            "mean_esr": event_metrics["mean_esr"],
+        }
 
-    output_dir = result_dir(root, dataset_name, method_name, seed).parent
+    output_dir = tuning_result_dir(root, dataset_name, method_name, run_timestamp)
     output_dir.mkdir(parents=True, exist_ok=True)
     save_json(output_dir / "tuning_summary.json", tuning_summary)
     if event_metrics is not None:
@@ -371,33 +455,72 @@ def main() -> None:
     parser.add_argument(
         "--methods",
         nargs="+",
-        default=list(ALL_METHODS),
+        default=None,
         choices=ALL_METHODS,
         metavar="METHOD",
-        help=f"One or more methods to tune. Default: all ({', '.join(ALL_METHODS)}).",
+        help="One or more methods to tune. Default depends on --preset.",
     )
     parser.add_argument("--root", type=Path, default=Path.cwd())
-    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--preset", choices=PRESETS, default="fast")
+    parser.add_argument("--top-k", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-calibration-samples", type=int, default=None)
     parser.add_argument("--max-grid", type=int, default=None)
     parser.add_argument("--skip-stage-b", action="store_true")
+    parser.add_argument("--full-stage-b-eval", action="store_true")
+    parser.add_argument("--stage-b-for-untuned", action="store_true")
     parser.add_argument("--stage-b-epochs", type=int, default=None)
     parser.add_argument("--stage-b-max-train-samples", type=int, default=None)
     parser.add_argument("--stage-b-max-val-samples", type=int, default=None)
     parser.add_argument("--stage-b-max-test-samples", type=int, default=None)
+    parser.add_argument("--stage-b-max-slices", type=int, default=None)
+    parser.add_argument("--run-timestamp", type=str, default=None)
     parser.add_argument("--force-cpu", action="store_true")
     args = parser.parse_args()
 
     setup_logging()
+    run_timestamp = args.run_timestamp or make_run_timestamp()
 
     datasets: list[str] = args.datasets
-    methods: list[str] = args.methods
+    methods: list[str] = list(args.methods or _default_methods_for_preset(args.preset))
+    top_k = int(args.top_k if args.top_k is not None else _default_for_preset(args.preset, "top_k", fallback=5))
+    max_calibration_samples = args.max_calibration_samples
+    if max_calibration_samples is None:
+        max_calibration_samples = _default_for_preset(args.preset, "max_calibration_samples")
+    stage_b_epochs = args.stage_b_epochs
+    if stage_b_epochs is None:
+        stage_b_epochs = _default_for_preset(args.preset, "stage_b_epochs")
+    stage_b_max_train_samples = args.stage_b_max_train_samples
+    if stage_b_max_train_samples is None:
+        stage_b_max_train_samples = _default_for_preset(args.preset, "stage_b_max_train_samples")
+    stage_b_max_val_samples = args.stage_b_max_val_samples
+    if stage_b_max_val_samples is None:
+        stage_b_max_val_samples = _default_for_preset(args.preset, "stage_b_max_val_samples")
+    stage_b_max_test_samples = args.stage_b_max_test_samples
+    if stage_b_max_test_samples is None:
+        stage_b_max_test_samples = _default_for_preset(args.preset, "stage_b_max_test_samples")
+    stage_b_max_slices = args.stage_b_max_slices
+    if stage_b_max_slices is None:
+        stage_b_max_slices = _default_for_preset(args.preset, "stage_b_max_slices")
+    grid_preset = "fast" if args.preset == "fast" else "paper"
+    stage_b_lightweight = args.preset == "fast" and not args.full_stage_b_eval
     total_combos = len(datasets) * len(methods)
 
     logger.info("Tuning plan: %d dataset(s) x %d method(s) = %d combination(s)", len(datasets), len(methods), total_combos)
+    logger.info("  Preset   : %s", args.preset)
+    logger.info("  Timestamp: %s", run_timestamp)
     logger.info("  Datasets : %s", ", ".join(datasets))
     logger.info("  Methods  : %s", ", ".join(methods))
+    logger.info(
+        "  Stage B  : top_k=%d epochs=%s train_cap=%s val_cap=%s test_cap=%s max_slices=%s lightweight=%s",
+        top_k,
+        stage_b_epochs,
+        stage_b_max_train_samples,
+        stage_b_max_val_samples,
+        stage_b_max_test_samples,
+        stage_b_max_slices,
+        stage_b_lightweight,
+    )
 
     completed: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
@@ -415,15 +538,20 @@ def main() -> None:
                     dataset_name=dataset_name,
                     method_name=method_name,
                     seed=args.seed,
-                    top_k=args.top_k,
-                    max_calibration_samples=args.max_calibration_samples,
+                    top_k=top_k,
+                    max_calibration_samples=max_calibration_samples,
                     max_grid=args.max_grid,
+                    grid_preset=grid_preset,
                     skip_stage_b=args.skip_stage_b,
-                    stage_b_epochs=args.stage_b_epochs,
-                    stage_b_max_train_samples=args.stage_b_max_train_samples,
-                    stage_b_max_val_samples=args.stage_b_max_val_samples,
-                    stage_b_max_test_samples=args.stage_b_max_test_samples,
+                    stage_b_lightweight=stage_b_lightweight,
+                    stage_b_for_untuned=args.stage_b_for_untuned,
+                    stage_b_epochs=stage_b_epochs,
+                    stage_b_max_train_samples=stage_b_max_train_samples,
+                    stage_b_max_val_samples=stage_b_max_val_samples,
+                    stage_b_max_test_samples=stage_b_max_test_samples,
+                    stage_b_max_slices=stage_b_max_slices,
                     force_cpu=args.force_cpu,
+                    run_timestamp=run_timestamp,
                 )
                 completed.append(summary)
             except Exception:
@@ -445,6 +573,10 @@ def main() -> None:
     # Write a global summary file
     global_summary = {
         "total_combinations": total_combos,
+        "run_timestamp": run_timestamp,
+        "preset": args.preset,
+        "grid_preset": grid_preset,
+        "stage_b_lightweight": stage_b_lightweight,
         "completed_count": len(completed),
         "failed_count": len(failed),
         "completed": [
@@ -453,7 +585,7 @@ def main() -> None:
         ],
         "failed": failed,
     }
-    global_summary_path = args.root / RESULTS_ROOT / "tuning_global_summary.json"
+    global_summary_path = args.root / RESULTS_ROOT / f"tuning_global_summary_{run_timestamp}.json"
     global_summary_path.parent.mkdir(parents=True, exist_ok=True)
     save_json(global_summary_path, global_summary)
     logger.info("Global summary saved to %s", global_summary_path)

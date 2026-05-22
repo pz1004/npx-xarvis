@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -22,6 +23,7 @@ from src.utils.serialization import load_json
 
 
 RESULTS_ROOT = Path("results") / "paper"
+RUN_TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S_%f"
 EventEncoding: TypeAlias = np.ndarray | FilterResult
 EventEncoder: TypeAlias = Callable[[np.ndarray], EventEncoding]
 Tensorizer: TypeAlias = Callable[[EventEncoding], torch.Tensor]
@@ -64,8 +66,45 @@ def load_method_config(root: Path, method_name: str) -> MethodConfig:
     )
 
 
-def result_dir(root: Path, dataset_name: str, method_name: str, seed: int) -> Path:
-    return root / RESULTS_ROOT / dataset_name / method_name / f"seed_{seed}"
+def make_run_timestamp() -> str:
+    return datetime.now().strftime(RUN_TIMESTAMP_FORMAT)
+
+
+def result_dir(root: Path, dataset_name: str, method_name: str, seed: int, run_timestamp: str | None = None) -> Path:
+    seed_dir = f"seed_{seed}" if run_timestamp is None else f"seed_{seed}__{run_timestamp}"
+    return root / RESULTS_ROOT / dataset_name / method_name / seed_dir
+
+
+def latest_result_dir(root: Path, dataset_name: str, method_name: str, seed: int) -> Path:
+    method_dir = root / RESULTS_ROOT / dataset_name / method_name
+    timestamped = sorted(method_dir.glob(f"seed_{seed}__*"))
+    if timestamped:
+        return timestamped[-1]
+    return result_dir(root, dataset_name, method_name, seed)
+
+
+def tuning_result_dir(root: Path, dataset_name: str, method_name: str, run_timestamp: str) -> Path:
+    return root / RESULTS_ROOT / dataset_name / method_name / f"tuning_{run_timestamp}"
+
+
+def latest_tuning_summary_path(root: Path, dataset_name: str, method_name: str) -> Path | None:
+    method_dir = root / RESULTS_ROOT / dataset_name / method_name
+    timestamped = sorted(method_dir.glob("tuning_*/tuning_summary.json"))
+    if timestamped:
+        return timestamped[-1]
+    legacy = method_dir / "tuning_summary.json"
+    return legacy if legacy.exists() else None
+
+
+def latest_tuning_filter_params(root: Path, dataset_name: str, method_name: str) -> tuple[dict[str, Any], Path] | None:
+    tuning_path = latest_tuning_summary_path(root, dataset_name, method_name)
+    if tuning_path is None:
+        return None
+    tuning_summary = load_json(tuning_path)
+    selected = tuning_summary["selected"]
+    if "filter_params" not in selected:
+        return None
+    return dict(selected["filter_params"]), tuning_path
 
 
 def resolve_device(force_cpu: bool = False) -> torch.device:
@@ -178,13 +217,53 @@ def calibration_filter_params(
     return filter_params
 
 
-def candidate_param_grid(method_name: str) -> list[dict[str, Any]]:
+def candidate_param_grid(method_name: str, preset: str = "paper") -> list[dict[str, Any]]:
+    if preset not in {"fast", "paper"}:
+        raise ValueError(f"Unsupported candidate grid preset: {preset}")
     if method_name in {"raw_snn", "frame_snn"}:
         return [{}]
     if method_name in {"ba_snn", "stcf_rc_snn"}:
         return [{"delta_t_us": delta_t_us} for delta_t_us in (1000, 2000, 5000)]
     if method_name == "proposed_ref":
         return [{"tau_ref_dig_us": tau_ref} for tau_ref in (500, 1000, 2000)]
+    if preset == "fast" and method_name == "proposed_sup":
+        return [
+            {
+                "tau_ref_dig_us": tau_ref,
+                "delta_t_us": delta_t_us,
+                "k0": k0,
+                "gamma": 0,
+                "tau_pair_us": 1000,
+                "k_high": 2,
+                "t_recover_us": 1_000_000,
+                "warmup_us": 5_000,
+            }
+            for tau_ref, delta_t_us, k0 in itertools.product(
+                (500, 1000, 2000),
+                (1000, 2000, 5000),
+                (1, 2),
+            )
+        ]
+    if preset == "fast" and method_name in {"proposed_pol", "proposed_conf"}:
+        return [
+            {
+                "tau_ref_dig_us": tau_ref,
+                "delta_t_us": delta_t_us,
+                "k0": k0,
+                "gamma": gamma,
+                "tau_pair_us": 1000,
+                "k_high": k_high,
+                "t_recover_us": 1_000_000,
+                "warmup_us": 5_000,
+            }
+            for tau_ref, delta_t_us, k0, gamma, k_high in itertools.product(
+                (500, 1000, 2000),
+                (1000, 2000, 5000),
+                (1, 2),
+                (0, 1),
+                (2, 3),
+            )
+        ]
     if method_name in {"proposed_sup", "proposed_pol", "proposed_conf"}:
         grid: list[dict[str, Any]] = []
         for tau_ref, delta_t_us, k0, gamma, tau_pair_us, k_high, t_recover_us in itertools.product(
@@ -205,16 +284,34 @@ def candidate_param_grid(method_name: str) -> list[dict[str, Any]]:
                     "tau_pair_us": tau_pair_us,
                     "k_high": k_high,
                     "t_recover_us": t_recover_us,
+                    "warmup_us": 5_000,
                 }
             )
         return grid
     if method_name == "proposed_lowmem":
+        if preset == "fast":
+            return [
+                {
+                    "tau_ref_dig_us": tau_ref,
+                    "delta_t_us": delta_t_us,
+                    "k0": k0,
+                    "k_high": k_high,
+                    "warmup_us": 5_000,
+                }
+                for tau_ref, delta_t_us, k0, k_high in itertools.product(
+                    (500, 1000, 2000),
+                    (1000, 2000, 5000),
+                    (1, 2),
+                    (2, 3),
+                )
+            ]
         return [
             {
                 "tau_ref_dig_us": tau_ref,
                 "delta_t_us": delta_t_us,
                 "k0": k0,
                 "k_high": k_high,
+                "warmup_us": 5_000,
             }
             for tau_ref, delta_t_us, k0, k_high in itertools.product(
                 (500, 1000, 2000),

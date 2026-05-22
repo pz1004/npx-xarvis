@@ -14,6 +14,8 @@ from src.data.noise_injection import build_noise_suites
 from src.experiments.common import (
     build_method_pipeline,
     calibration_filter_params,
+    latest_tuning_filter_params,
+    latest_tuning_summary_path,
     load_method_config,
     load_training_config,
 )
@@ -58,6 +60,44 @@ def _load_summaries(root: Path, allowed_purposes: tuple[str, ...]) -> pd.DataFra
     frame = pd.DataFrame.from_records(records)
     frame["method_label"] = frame["method"].map(METHOD_LABELS).fillna(frame["method"])
     return frame
+
+
+def _load_event_metrics(root: Path) -> pd.DataFrame:
+    records: list[dict[str, Any]] = []
+    results_root = root / SUMMARY_GLOB
+    if not results_root.exists():
+        return pd.DataFrame()
+    for dataset_dir in sorted(path for path in results_root.iterdir() if path.is_dir() and path.name != "aggregated"):
+        for method_dir in sorted(path for path in dataset_dir.iterdir() if path.is_dir()):
+            tuning_summary_path = latest_tuning_summary_path(root, dataset_dir.name, method_dir.name)
+            if tuning_summary_path is None:
+                continue
+            event_metrics_path = tuning_summary_path.with_name("event_metrics.json")
+            if not event_metrics_path.exists():
+                continue
+            payload = load_json(event_metrics_path)
+            run_timestamp = tuning_summary_path.parent.name.removeprefix("tuning_")
+            for source, source_payload in payload.get("sources", {}).items():
+                for ratio_payload in source_payload.get("ratios", []):
+                    records.append(
+                        {
+                            "dataset": dataset_dir.name,
+                            "method": method_dir.name,
+                            "method_label": METHOD_LABELS.get(method_dir.name, method_dir.name),
+                            "run_timestamp": run_timestamp,
+                            "source": source,
+                            "ratio": ratio_payload.get("ratio"),
+                            "auc": ratio_payload.get("auc"),
+                            "ekr": ratio_payload.get("ekr"),
+                            "esr": ratio_payload.get("esr"),
+                            "compression_ratio": ratio_payload.get("compression_ratio"),
+                            "accepted_events": ratio_payload.get("accepted_events"),
+                            "mean_auc": source_payload.get("mean_auc"),
+                            "mean_ekr": source_payload.get("mean_ekr"),
+                            "mean_esr": source_payload.get("mean_esr"),
+                        }
+                    )
+    return pd.DataFrame.from_records(records)
 
 
 def _format_mean_std(series: pd.Series) -> str:
@@ -112,12 +152,10 @@ def _save_table(table: pd.DataFrame, path: Path) -> None:
 
 
 def _selected_filter_params(root: Path, dataset_name: str, method_name: str) -> dict[str, Any]:
-    tuning_path = root / SUMMARY_GLOB / dataset_name / method_name / "tuning_summary.json"
-    if tuning_path.exists():
-        tuning_summary = load_json(tuning_path)
-        selected = tuning_summary["selected"]
-        if "filter_params" in selected:
-            return selected["filter_params"]
+    latest = latest_tuning_filter_params(root, dataset_name, method_name)
+    if latest is not None:
+        filter_params, _tuning_path = latest
+        return filter_params
     method_config = load_method_config(root, method_name)
     return dict(method_config.filter_params)
 
@@ -225,11 +263,15 @@ def main() -> None:
     setup_logging()
     main_frame = _load_summaries(args.root, allowed_purposes=("paper_main",))
     efficiency_frame = _load_summaries(args.root, allowed_purposes=("paper_main", "paper_profile"))
-    if main_frame.empty and efficiency_frame.empty:
+    event_metrics_frame = _load_event_metrics(args.root)
+    if main_frame.empty and efficiency_frame.empty and event_metrics_frame.empty:
         raise RuntimeError("No protocol run summaries found under results/paper")
 
     output_dir = args.root / SUMMARY_GLOB / "aggregated"
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not event_metrics_frame.empty:
+        _save_table(event_metrics_frame.sort_values(["dataset", "method_label", "source", "ratio"]), output_dir / "event_metrics.csv")
 
     if not main_frame.empty:
         accuracy_frame = main_frame[main_frame["method"].isin(MAIN_METHODS)]
@@ -242,8 +284,11 @@ def main() -> None:
     else:
         accuracy_table = pd.DataFrame()
 
-    filtered_efficiency = efficiency_frame[efficiency_frame["method"].isin(EFFICIENCY_METHODS)]
-    efficiency_table = _efficiency_table(filtered_efficiency)
+    if efficiency_frame.empty:
+        efficiency_table = pd.DataFrame()
+    else:
+        filtered_efficiency = efficiency_frame[efficiency_frame["method"].isin(EFFICIENCY_METHODS)]
+        efficiency_table = _efficiency_table(filtered_efficiency)
     _save_table(efficiency_table, output_dir / "efficiency.csv")
 
     if not main_frame.empty:

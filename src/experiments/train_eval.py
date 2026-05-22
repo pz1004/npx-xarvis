@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import copy
 import importlib.metadata
+import json
 import math
+import os
 import platform
 import sys
 import time
@@ -29,10 +31,12 @@ from src.experiments.common import (
     Tensorizer,
     build_method_pipeline,
     calibration_filter_params,
+    latest_tuning_filter_params,
     load_dataset_config,
     load_method_config,
     load_stage1_config,
     load_training_config,
+    make_run_timestamp,
     resolve_device,
     result_dir,
     subset_dataset,
@@ -99,6 +103,29 @@ def _build_scheduler(optimizer: torch.optim.Optimizer, total_epochs: int, warmup
         return 0.5 * (1.0 + math.cos(math.pi * progress))
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+
+def _resolve_dataloader_settings(training_config: dict[str, Any], device: torch.device) -> dict[str, Any]:
+    configured_workers = training_config.get("dataloader_num_workers")
+    if configured_workers is None:
+        num_workers = min(4, os.cpu_count() or 1) if device.type == "cuda" else 0
+    else:
+        num_workers = max(0, int(configured_workers))
+    pin_memory = bool(training_config.get("dataloader_pin_memory", device.type == "cuda"))
+    if device.type != "cuda":
+        pin_memory = False
+    persistent_workers = bool(training_config.get("dataloader_persistent_workers", num_workers > 0))
+    if num_workers == 0:
+        persistent_workers = False
+    prefetch_factor = None
+    if num_workers > 0:
+        prefetch_factor = int(training_config.get("dataloader_prefetch_factor", 2))
+    return {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "persistent_workers": persistent_workers,
+        "prefetch_factor": prefetch_factor,
+    }
 
 
 def _zero_preprocessing_metrics() -> dict[str, float]:
@@ -257,11 +284,12 @@ def _build_loaders(
     test_dataset: Dataset,
     batch_size: int,
     seed: int,
+    loader_settings: dict[str, Any],
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     return (
-        build_dataloader(train_dataset, batch_size=batch_size, train_mode=True, seed=seed),
-        build_dataloader(val_dataset, batch_size=batch_size, train_mode=False, seed=seed),
-        build_dataloader(test_dataset, batch_size=batch_size, train_mode=False, seed=seed),
+        build_dataloader(train_dataset, batch_size=batch_size, train_mode=True, seed=seed, **loader_settings),
+        build_dataloader(val_dataset, batch_size=batch_size, train_mode=False, seed=seed, **loader_settings),
+        build_dataloader(test_dataset, batch_size=batch_size, train_mode=False, seed=seed, **loader_settings),
     )
 
 
@@ -356,6 +384,49 @@ def _software_versions() -> dict[str, str]:
     return versions
 
 
+def _parse_filter_params_json(filter_params_json: str | None) -> dict[str, Any]:
+    if filter_params_json is None:
+        return {}
+    try:
+        payload = json.loads(filter_params_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid --filter-params JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("--filter-params must be a JSON object")
+    return dict(payload)
+
+
+def _resolve_cli_filter_params(
+    *,
+    root: Path,
+    dataset_name: str,
+    method_name: str,
+    use_latest_tuning: bool,
+    filter_params_json: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    resolved: dict[str, Any] = {}
+    source_info: dict[str, Any] = {
+        "use_latest_tuning": use_latest_tuning,
+        "manual_filter_params": filter_params_json is not None,
+        "latest_tuning_path": None,
+    }
+    if use_latest_tuning:
+        latest = latest_tuning_filter_params(root, dataset_name, method_name)
+        if latest is None:
+            raise FileNotFoundError(
+                f"No tuning_summary.json found for dataset={dataset_name} method={method_name}"
+            )
+        latest_params, tuning_path = latest
+        resolved.update(latest_params)
+        source_info["latest_tuning_path"] = str(tuning_path)
+    manual_params = _parse_filter_params_json(filter_params_json)
+    resolved.update(manual_params)
+    if not resolved:
+        return None, source_info
+    source_info["resolved_filter_params"] = resolved
+    return resolved, source_info
+
+
 def _filter_memory_name(method_name: str, family: str) -> str:
     if family == "proposed_balanced":
         return "proposed_balanced"
@@ -406,6 +477,7 @@ def _evaluate_robustness(
     seed: int,
     training_config: dict[str, Any],
     tau_pair_us: int,
+    loader_settings: dict[str, Any],
 ) -> dict[str, Any]:
     ratios = tuple(float(ratio) for ratio in training_config["noise_ratios"])
     results: dict[str, dict[str, Any]] = {}
@@ -426,7 +498,7 @@ def _evaluate_robustness(
                 tau_pair_us=tau_pair_us,
                 seed=corruption_seed,
             )
-            loader = build_dataloader(dataset, batch_size=batch_size, train_mode=False, seed=seed)
+            loader = build_dataloader(dataset, batch_size=batch_size, train_mode=False, seed=seed, **loader_settings)
             accuracy = _evaluate_model(model, loader, device)["accuracy"]
             accuracies.append(accuracy)
             per_ratio.append(
@@ -475,6 +547,7 @@ def _make_summary(
         "dataset": dataset_name,
         "method": method_name,
         "seed": seed,
+        "run_timestamp": run_metadata.get("run_timestamp"),
         "device": str(device),
         "time_bin_us": bundle.slicing.time_bin_us,
         "t_max": bundle.slicing.t_max,
@@ -502,9 +575,10 @@ def _save_run_artifacts(
     model: nn.Module | None,
     summary: dict[str, Any],
     robustness: dict[str, Any] | None,
+    save_checkpoint: bool = True,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    if model is not None:
+    if model is not None and save_checkpoint:
         torch.save(model.state_dict(), output_dir / "best_model.pt")
     save_json(output_dir / "summary.json", summary)
     if robustness is not None:
@@ -555,7 +629,14 @@ def _analytical_lowlat_summary(
         run_metadata=run_metadata,
         robustness=None,
     )
-    output_dir = result_dir(root, dataset_name, result_method_name or method_name, seed)
+    output_dir = result_dir(
+        root,
+        dataset_name,
+        result_method_name or method_name,
+        seed,
+        run_timestamp=run_metadata.get("run_timestamp"),
+    )
+    summary["run_metadata"]["output_dir"] = str(output_dir)
     _save_run_artifacts(output_dir, None, summary, robustness=None)
     return summary
 
@@ -567,15 +648,22 @@ def run_training_experiment(
     seed: int,
     *,
     filter_params_override: dict[str, Any] | None = None,
+    filter_params_source: dict[str, Any] | None = None,
     result_method_name: str | None = None,
     epochs_override: int | None = None,
     max_train_samples: int | None = None,
     max_val_samples: int | None = None,
     max_test_samples: int | None = None,
+    max_slices_override: int | None = None,
     force_cpu: bool = False,
     run_purpose: str | None = None,
+    skip_test_evaluation: bool = False,
+    skip_posthoc_metrics: bool = False,
+    save_checkpoint: bool = True,
+    run_timestamp: str | None = None,
 ) -> dict[str, Any]:
     run_start = time.perf_counter()
+    resolved_run_timestamp = run_timestamp or make_run_timestamp()
     set_seed(seed)
     training_config = load_training_config(root)
     dataset_config = load_dataset_config(root, dataset_name)
@@ -602,7 +690,12 @@ def run_training_experiment(
     )
 
     LOGGER.info("Preparing dataset bundle: dataset=%s split_seed=%s", dataset_name, training_config["split_seed"])
-    bundle = prepare_dataset_bundle(dataset_name, root, split_seed=training_config["split_seed"])
+    bundle = prepare_dataset_bundle(
+        dataset_name,
+        root,
+        split_seed=training_config["split_seed"],
+        max_slices=int(max_slices_override or 300),
+    )
     LOGGER.info(
         "Dataset ready: train=%d val=%d test=%d sensor_size=%s slicing=(time_bin_us=%d, t_max=%d)",
         len(bundle.train_raw),
@@ -624,6 +717,7 @@ def run_training_experiment(
     stage1_summary = run_stage1(stage1_config)
     run_metadata = {
         "run_purpose": resolved_run_purpose,
+        "run_timestamp": resolved_run_timestamp,
         "is_protocol_run": resolved_run_purpose == "paper_main",
         "effective_epochs": int(epochs_override or dataset_config["epochs"]),
         "sample_caps": {
@@ -631,6 +725,13 @@ def run_training_experiment(
             "val": max_val_samples,
             "test": max_test_samples,
         },
+        "max_slices": int(max_slices_override or 300),
+        "evaluation": {
+            "skip_test_evaluation": skip_test_evaluation,
+            "skip_posthoc_metrics": skip_posthoc_metrics,
+            "save_checkpoint": save_checkpoint,
+        },
+        "filter_params_source": filter_params_source,
         "calibration_subset": calibration_info,
         "software_versions": _software_versions(),
         "hardware": {
@@ -747,12 +848,16 @@ def run_training_experiment(
         len(val_dataset),
         len(test_dataset),
     )
+    loader_settings = _resolve_dataloader_settings(training_config, device)
+    run_metadata["dataloader"] = loader_settings
+    LOGGER.info("Dataloader settings: %s", loader_settings)
     train_loader, val_loader, test_loader = _build_loaders(
         train_dataset=train_dataset,
         val_dataset=val_dataset,
         test_dataset=test_dataset,
         batch_size=batch_size,
         seed=seed,
+        loader_settings=loader_settings,
     )
 
     model = _build_model(num_classes=bundle.metadata.num_classes, frame_mode=method_config.frame_mode)
@@ -805,41 +910,60 @@ def run_training_experiment(
         )
 
     model.load_state_dict(best_state)
-    LOGGER.info("Training epochs complete. Evaluating best checkpoint on validation and test sets")
+    LOGGER.info("Training epochs complete. Evaluating best checkpoint")
     val_metrics = _evaluate_model(model, val_loader, device=device)
-    test_metrics = _evaluate_model(model, test_loader, device=device)
-    sample_batch = _extract_sample_batch(test_loader)
+    test_metrics = None if skip_test_evaluation else _evaluate_model(model, test_loader, device=device)
 
-    LOGGER.info("Measuring preprocessing cost")
-    preprocessing_metrics = _measure_preprocessing(
-        raw_dataset=test_raw,
-        encoder=encoder,
-        tensorizer=tensorizer,
-        max_samples=int(training_config["profile_samples"]),
-    )
-    LOGGER.info("Measuring inference latency")
-    inference_latency_sec = _measure_inference_latency(
-        model=model,
-        sample_batch=sample_batch,
-        device=device,
-        warmup=int(training_config["inference_warmup"]),
-        timed=int(training_config["inference_runs"]),
-    )
-    profile_metrics = _profile_model(model=model, sample_batch=sample_batch, frame_mode=method_config.frame_mode)
-    LOGGER.info("Evaluating robustness suites")
-    robustness = _evaluate_robustness(
-        model=model,
-        raw_dataset=test_raw,
-        encoder=encoder,
-        tensorizer=tensorizer,
-        bundle=bundle,
-        dataset_name=dataset_name,
-        batch_size=batch_size,
-        device=device,
-        seed=seed,
-        training_config=training_config,
-        tau_pair_us=int(resolved_filter_params.get("tau_pair_us", 1000)),
-    )
+    if skip_posthoc_metrics:
+        LOGGER.info("Skipping posthoc profiling and robustness metrics for this run")
+        preprocessing_metrics = {
+            "accepted_event_ratio": None,
+            "compression_ratio": None,
+            "preprocessing_latency_sec": None,
+            "preprocessing_throughput_eps": None,
+        }
+        inference_latency_sec = None
+        profile_metrics = {
+            "parameter_count": parameter_count(model),
+            "parameter_memory_bytes": parameter_memory_bytes(model),
+            "peak_activation_bytes": 0,
+            "dense_macs": 0,
+            "sops": 0,
+        }
+        robustness = None
+    else:
+        sample_batch = _extract_sample_batch(test_loader)
+        LOGGER.info("Measuring preprocessing cost")
+        preprocessing_metrics = _measure_preprocessing(
+            raw_dataset=test_raw,
+            encoder=encoder,
+            tensorizer=tensorizer,
+            max_samples=int(training_config["profile_samples"]),
+        )
+        LOGGER.info("Measuring inference latency")
+        inference_latency_sec = _measure_inference_latency(
+            model=model,
+            sample_batch=sample_batch,
+            device=device,
+            warmup=int(training_config["inference_warmup"]),
+            timed=int(training_config["inference_runs"]),
+        )
+        profile_metrics = _profile_model(model=model, sample_batch=sample_batch, frame_mode=method_config.frame_mode)
+        LOGGER.info("Evaluating robustness suites")
+        robustness = _evaluate_robustness(
+            model=model,
+            raw_dataset=test_raw,
+            encoder=encoder,
+            tensorizer=tensorizer,
+            bundle=bundle,
+            dataset_name=dataset_name,
+            batch_size=batch_size,
+            device=device,
+            seed=seed,
+            training_config=training_config,
+            tau_pair_us=int(resolved_filter_params.get("tau_pair_us", 1000)),
+            loader_settings=loader_settings,
+        )
 
     summary = _make_summary(
         dataset_name=dataset_name,
@@ -861,12 +985,13 @@ def run_training_experiment(
         robustness=robustness,
     )
 
-    output_dir = result_dir(root, dataset_name, result_method_name or method_name, seed)
-    _save_run_artifacts(output_dir, model, summary, robustness)
+    output_dir = result_dir(root, dataset_name, result_method_name or method_name, seed, run_timestamp=resolved_run_timestamp)
+    summary["run_metadata"]["output_dir"] = str(output_dir)
+    _save_run_artifacts(output_dir, model, summary, robustness, save_checkpoint=save_checkpoint)
     LOGGER.info(
-        "Training experiment complete: val_accuracy=%.4f test_accuracy=%.4f elapsed=%.1fs artifacts=%s",
-        summary["val_accuracy"],
-        summary["test_accuracy"],
+        "Training experiment complete: val_accuracy=%s test_accuracy=%s elapsed=%.1fs artifacts=%s",
+        "none" if summary["val_accuracy"] is None else f"{summary['val_accuracy']:.4f}",
+        "none" if summary["test_accuracy"] is None else f"{summary['test_accuracy']:.4f}",
         time.perf_counter() - run_start,
         output_dir,
     )
@@ -883,20 +1008,43 @@ def main() -> None:
     parser.add_argument("--max-train-samples", type=int, default=None)
     parser.add_argument("--max-val-samples", type=int, default=None)
     parser.add_argument("--max-test-samples", type=int, default=None)
+    parser.add_argument("--max-slices", type=int, default=None)
+    parser.add_argument("--skip-test-evaluation", action="store_true")
+    parser.add_argument("--skip-posthoc-metrics", action="store_true")
+    parser.add_argument("--no-save-checkpoint", action="store_true")
+    parser.add_argument("--run-timestamp", type=str, default=None)
+    parser.add_argument("--use-latest-tuning", action="store_true")
+    parser.add_argument("--filter-params", type=str, default=None)
     parser.add_argument("--force-cpu", action="store_true")
     args = parser.parse_args()
 
     setup_logging()
+    filter_params_override, filter_param_source = _resolve_cli_filter_params(
+        root=args.root,
+        dataset_name=args.dataset,
+        method_name=args.method,
+        use_latest_tuning=args.use_latest_tuning,
+        filter_params_json=args.filter_params,
+    )
+    if filter_params_override is not None:
+        LOGGER.info("Using filter parameter override: %s", filter_param_source)
     summary = run_training_experiment(
         root=args.root,
         dataset_name=args.dataset,
         method_name=args.method,
         seed=args.seed,
+        filter_params_override=filter_params_override,
+        filter_params_source=filter_param_source,
         epochs_override=args.epochs_override,
         max_train_samples=args.max_train_samples,
         max_val_samples=args.max_val_samples,
         max_test_samples=args.max_test_samples,
+        max_slices_override=args.max_slices,
         force_cpu=args.force_cpu,
+        skip_test_evaluation=args.skip_test_evaluation,
+        skip_posthoc_metrics=args.skip_posthoc_metrics,
+        save_checkpoint=not args.no_save_checkpoint,
+        run_timestamp=args.run_timestamp,
     )
     print(summary)
 

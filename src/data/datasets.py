@@ -241,6 +241,10 @@ def _split_cache_path(dataset_name: str, split_seed: int, root: Path) -> Path:
     return root / "results" / "splits" / f"{dataset_name}_seed{split_seed}.json"
 
 
+def _slicing_cache_path(dataset_name: str, split_seed: int, max_slices: int, root: Path) -> Path:
+    return root / "results" / "splits" / f"{dataset_name}_seed{split_seed}_slicing_max{max_slices}.json"
+
+
 def _target_at_index(dataset: Dataset, index: int) -> Any:
     if isinstance(dataset, Subset):
         return _target_at_index(dataset.dataset, int(dataset.indices[index]))
@@ -377,9 +381,51 @@ def _metadata_sensor_size(
     return resize_to[0], resize_to[1], sensor_size[2]
 
 
-def prepare_dataset_bundle(dataset_name: str, root: Path, split_seed: int = 2027) -> DatasetBundle:
+def _load_cached_slicing(
+    *,
+    dataset_name: str,
+    split_seed: int,
+    max_slices: int,
+    root: Path,
+    train_count: int,
+) -> SlicingConfig | None:
+    cache_path = _slicing_cache_path(dataset_name, split_seed, max_slices, root)
+    if not cache_path.exists():
+        return None
+    payload = load_json(cache_path)
+    if int(payload.get("train_count", -1)) != train_count:
+        return None
+    return SlicingConfig(time_bin_us=int(payload["time_bin_us"]), t_max=int(payload["t_max"]))
+
+
+def _save_cached_slicing(
+    *,
+    dataset_name: str,
+    split_seed: int,
+    max_slices: int,
+    root: Path,
+    train_count: int,
+    slicing: SlicingConfig,
+) -> None:
+    cache_path = _slicing_cache_path(dataset_name, split_seed, max_slices, root)
+    save_json(
+        cache_path,
+        {
+            "dataset": dataset_name,
+            "split_seed": split_seed,
+            "max_slices": max_slices,
+            "train_count": train_count,
+            "time_bin_us": slicing.time_bin_us,
+            "t_max": slicing.t_max,
+        },
+    )
+
+
+def prepare_dataset_bundle(dataset_name: str, root: Path, split_seed: int = 2027, max_slices: int = 300) -> DatasetBundle:
     if dataset_name not in DATASET_REGISTRY:
         raise KeyError(f"Unknown dataset: {dataset_name}")
+    if max_slices <= 0:
+        raise ValueError("max_slices must be positive")
 
     bundle_start = perf_counter()
     spec = DATASET_REGISTRY[dataset_name]
@@ -418,21 +464,50 @@ def prepare_dataset_bundle(dataset_name: str, root: Path, split_seed: int = 2027
         full_dataset = _normalized_dataset(raw_train, sensor_size, resize_to)
         train_raw, val_raw, test_raw = _apply_split(full_dataset, split_payload)
 
-    LOGGER.info("Computing slicing durations: dataset=%s train_samples=%d", dataset_name, len(train_raw))
-    durations: list[int] = []
-    duration_start = perf_counter()
-    duration_log_interval = max(1, len(train_raw) // 10)
-    for index in range(len(train_raw)):
-        durations.append(sample_duration_us(train_raw[index][0]))
-        if (index + 1) % duration_log_interval == 0 or index + 1 == len(train_raw):
-            LOGGER.info(
-                "Slicing duration scan: dataset=%s sample=%d/%d elapsed=%.1fs",
-                dataset_name,
-                index + 1,
-                len(train_raw),
-                perf_counter() - duration_start,
-            )
-    slicing = select_time_bin_us(durations)
+    slicing = _load_cached_slicing(
+        dataset_name=dataset_name,
+        split_seed=split_seed,
+        max_slices=max_slices,
+        root=root,
+        train_count=len(train_raw),
+    )
+    if slicing is None:
+        LOGGER.info(
+            "Computing slicing durations: dataset=%s train_samples=%d max_slices=%d",
+            dataset_name,
+            len(train_raw),
+            max_slices,
+        )
+        durations: list[int] = []
+        duration_start = perf_counter()
+        duration_log_interval = max(1, len(train_raw) // 10)
+        for index in range(len(train_raw)):
+            durations.append(sample_duration_us(train_raw[index][0]))
+            if (index + 1) % duration_log_interval == 0 or index + 1 == len(train_raw):
+                LOGGER.info(
+                    "Slicing duration scan: dataset=%s sample=%d/%d elapsed=%.1fs",
+                    dataset_name,
+                    index + 1,
+                    len(train_raw),
+                    perf_counter() - duration_start,
+                )
+        slicing = select_time_bin_us(durations, max_slices=max_slices)
+        _save_cached_slicing(
+            dataset_name=dataset_name,
+            split_seed=split_seed,
+            max_slices=max_slices,
+            root=root,
+            train_count=len(train_raw),
+            slicing=slicing,
+        )
+    else:
+        LOGGER.info(
+            "Loaded cached slicing metadata: dataset=%s max_slices=%d slicing=(time_bin_us=%d, t_max=%d)",
+            dataset_name,
+            max_slices,
+            slicing.time_bin_us,
+            slicing.t_max,
+        )
     metadata = DatasetMetadata(
         name=dataset_name,
         sensor_size=_metadata_sensor_size(sensor_size, resize_to),
@@ -481,16 +556,27 @@ def build_dataloader(
     train_mode: bool,
     seed: int,
     num_workers: int = 0,
+    pin_memory: bool = False,
+    persistent_workers: bool = False,
+    prefetch_factor: int | None = None,
 ) -> DataLoader:
     effective_batch_size = min(batch_size, max(len(dataset), 1))
+    loader_kwargs: dict[str, Any] = {
+        "batch_size": effective_batch_size,
+        "shuffle": train_mode,
+        "drop_last": train_mode and len(dataset) >= effective_batch_size and len(dataset) > 1,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "worker_init_fn": seed_worker,
+        "generator": make_generator(seed),
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = persistent_workers
+        if prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = prefetch_factor
     return DataLoader(
         dataset,
-        batch_size=effective_batch_size,
-        shuffle=train_mode,
-        drop_last=train_mode and len(dataset) >= effective_batch_size and len(dataset) > 1,
-        num_workers=num_workers,
-        worker_init_fn=seed_worker,
-        generator=make_generator(seed),
+        **loader_kwargs,
     )
 
 

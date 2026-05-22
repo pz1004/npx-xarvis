@@ -1,0 +1,47 @@
+{
+  "completed": [
+    {
+      "dataset": "nmnist",
+      "elapsed_sec": 940.46,
+      "method": "ba_snn"
+    },
+    {
+      "dataset": "nmnist",
+      "elapsed_sec": 634.68,
+      "method": "stcf_rc_snn"
+    },
+    {
+      "dataset": "nmnist",
+      "elapsed_sec": 217.75,
+      "method": "proposed_ref"
+    },
+    {
+      "dataset": "nmnist",
+      "elapsed_sec": 319.24,
+      "method": "proposed_sup"
+    },
+    {
+      "dataset": "nmnist",
+      "elapsed_sec": 715.31,
+      "method": "proposed_pol"
+    },
+    {
+      "dataset": "nmnist",
+      "elapsed_sec": 711.96,
+      "method": "proposed_conf"
+    },
+    {
+      "dataset": "nmnist",
+      "elapsed_sec": 3947.31,
+      "method": "proposed_lowmem"
+    }
+  ],
+  "completed_count": 7,
+  "failed": [],
+  "failed_count": 0,
+  "grid_preset": "fast",
+  "preset": "fast",
+  "run_timestamp": "20260522_101453_643577",
+  "stage_b_lightweight": true,
+  "total_combinations": 7
+}

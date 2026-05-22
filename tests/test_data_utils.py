@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from src.common import SlicingConfig
 from src.data.datasets import (
     CIFAR10DVS_DOWNLOAD_URL,
     DATASET_REGISTRY,
@@ -18,8 +19,8 @@ from src.data.datasets import (
 )
 from src.data.event_io import EVENT_T, normalize_events
 from src.data.noise_injection import generate_shot_noise, inject_ba_noise, inject_mixed_noise, inject_shot_noise
-from src.data.slicing import select_time_bin_us
-from src.filters.metrics import evaluate_filter_predictions, state_memory_bytes
+from src.data.slicing import output_events_to_event_tensor, raw_events_to_frame_tensor, select_time_bin_us
+from src.filters.metrics import evaluate_filter_predictions, event_structural_ratio, state_memory_bytes
 from src.experiments.train_eval import _build_scheduler, _cap_batch_size_for_dense_input, _dense_sample_bytes
 
 
@@ -99,6 +100,47 @@ def test_dense_batch_cap_keeps_large_snn_inputs_within_budget() -> None:
         )
         == 128
     )
+
+
+def test_vectorized_raw_tensorizer_accumulates_duplicates_and_ignores_late_events() -> None:
+    events = np.asarray(
+        [
+            [1, 2, 0, 1],
+            [1, 2, 1, 1],
+            [2, 2, 1, -1],
+            [3, 3, 2500, 1],
+        ],
+        dtype=np.int64,
+    )
+    tensor = raw_events_to_frame_tensor(events, sensor_size=(4, 4, 2), slicing=SlicingConfig(time_bin_us=1000, t_max=2))
+    assert tensor.shape == (2, 2, 4, 4)
+    assert tensor[0, 0, 2, 1].item() == 2.0
+    assert tensor[0, 1, 2, 2].item() == 1.0
+    assert tensor.sum().item() == 3.0
+
+
+def test_vectorized_output_tensorizer_maps_confidence_channels() -> None:
+    output_events = np.asarray(
+        [
+            [1, 1, 0, 1, 1],
+            [1, 1, 10, 1, 2],
+            [2, 1, 10, -1, 1],
+            [2, 1, 10, -1, 2],
+            [3, 1, 10, 1, 0],
+            [0, 0, 2500, 1, 1],
+        ],
+        dtype=np.int64,
+    )
+    tensor = output_events_to_event_tensor(
+        output_events,
+        sensor_size=(4, 4, 2),
+        slicing=SlicingConfig(time_bin_us=1000, t_max=2),
+    )
+    assert tensor[0, 0, 1, 1].item() == 1.0
+    assert tensor[0, 1, 1, 1].item() == 1.0
+    assert tensor[0, 2, 1, 2].item() == 1.0
+    assert tensor[0, 3, 1, 2].item() == 1.0
+    assert tensor.sum().item() == 4.0
 
 
 def test_materialized_split_indices_are_deterministic(tmp_path: Path) -> None:
@@ -197,9 +239,29 @@ def test_noise_injection_preserves_exact_signal_labels_and_metrics() -> None:
     )
     assert metrics["auc"] == 1.0
     assert metrics["ekr"] == 0.5
+    assert metrics["esr"] == 1.0
     assert metrics["compression_ratio"] == 2.0
     assert state_memory_bytes("proposed_balanced", (34, 34, 2)) == 15 * 34 * 34
     assert state_memory_bytes("proposed_lowmem", (34, 34, 2)) == 2 * (34 + 34) * 4
+
+
+def test_label_based_esr_edge_cases() -> None:
+    assert event_structural_ratio(
+        np.asarray([True, True, False]),
+        np.asarray([True, True, False]),
+    ) == 1.0
+    assert event_structural_ratio(
+        np.asarray([True, True, False]),
+        np.asarray([False, False, True]),
+    ) == 0.0
+    assert event_structural_ratio(
+        np.asarray([True, True, True, False, False]),
+        np.asarray([True, False, True, True, False]),
+    ) == 2.0 / 3.0
+    assert event_structural_ratio(
+        np.asarray([False, False]),
+        np.asarray([True, False]),
+    ) == 0.0
 
 
 def test_shot_noise_lag_is_strictly_smaller_than_tau_pair() -> None:
