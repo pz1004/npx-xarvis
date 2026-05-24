@@ -1,0 +1,47 @@
+{
+  "completed": [
+    {
+      "dataset": "dvsgesture",
+      "elapsed_sec": 32507.2,
+      "method": "ba_snn"
+    },
+    {
+      "dataset": "dvsgesture",
+      "elapsed_sec": 25932.26,
+      "method": "stcf_rc_snn"
+    },
+    {
+      "dataset": "dvsgesture",
+      "elapsed_sec": 8044.64,
+      "method": "proposed_ref"
+    },
+    {
+      "dataset": "dvsgesture",
+      "elapsed_sec": 13298.98,
+      "method": "proposed_sup"
+    },
+    {
+      "dataset": "dvsgesture",
+      "elapsed_sec": 33743.99,
+      "method": "proposed_pol"
+    },
+    {
+      "dataset": "dvsgesture",
+      "elapsed_sec": 33726.34,
+      "method": "proposed_conf"
+    },
+    {
+      "dataset": "dvsgesture",
+      "elapsed_sec": 19252.13,
+      "method": "proposed_lowmem"
+    }
+  ],
+  "completed_count": 7,
+  "failed": [],
+  "failed_count": 0,
+  "grid_preset": "fast",
+  "preset": "fast",
+  "run_timestamp": "20260523_001011_729868",
+  "stage_b_lightweight": true,
+  "total_combinations": 7
+}

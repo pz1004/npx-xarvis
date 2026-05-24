@@ -1,0 +1,145 @@
+{
+  "accepted_event_ratio": null,
+  "aunc": null,
+  "compression_ratio": null,
+  "confidence_ratio": 1.4369678497314453,
+  "dataset": "dvsgesture",
+  "dense_macs": 0,
+  "device": "cpu",
+  "end_to_end_latency_sec": null,
+  "epoch_history": [
+    {
+      "epoch": 0,
+      "train_loss": 2.698728386561076,
+      "val_accuracy": 0.15740740795930228,
+      "val_loss": 2.4011781303970903
+    },
+    {
+      "epoch": 1,
+      "train_loss": 2.4213905254999797,
+      "val_accuracy": 0.1203703706463178,
+      "val_loss": 2.533454338709513
+    },
+    {
+      "epoch": 2,
+      "train_loss": 2.438492027918498,
+      "val_accuracy": 0.12962962962962962,
+      "val_loss": 2.3513824233302363
+    },
+    {
+      "epoch": 3,
+      "train_loss": 2.4444597244262694,
+      "val_accuracy": 0.1574074074074074,
+      "val_loss": 3.284340152034053
+    },
+    {
+      "epoch": 4,
+      "train_loss": 2.357262309392293,
+      "val_accuracy": 0.18518518518518517,
+      "val_loss": 2.6495426672476308
+    }
+  ],
+  "filter_params": {
+    "alpha": 0.01,
+    "delta_t_us": 5000,
+    "eps_us": 1,
+    "gamma": 0,
+    "k0": 1,
+    "k_high": 2,
+    "r_max_hz": 20000.0,
+    "t_recover_us": 1000000,
+    "tau_pair_us": 1000,
+    "tau_ref_dig_us": 500,
+    "u_hot": 32,
+    "warmup_us": 5000
+  },
+  "filter_state_memory_bytes": 245760,
+  "inference_latency_sec": null,
+  "method": "proposed_pol",
+  "parameter_count": 34786,
+  "parameter_memory_bytes": 139144,
+  "peak_activation_bytes": 0,
+  "preprocessing_latency_sec": null,
+  "preprocessing_throughput_eps": null,
+  "run_metadata": {
+    "batch_size": {
+      "configured": 32,
+      "cuda_dense_batch_budget_bytes": null,
+      "dense_input_budget_channels": 4,
+      "effective": 32
+    },
+    "calibration_subset": {
+      "cap": 1000,
+      "fraction": 0.1,
+      "seed": 2027,
+      "size": 97,
+      "strategy": "stratified_fraction"
+    },
+    "corruption_seed_policy": {
+      "event_level_base_seed": 2027,
+      "ratio_stride": 100,
+      "robustness_base_seed": 100000,
+      "source_order": [
+        "ba",
+        "shot",
+        "mixed"
+      ],
+      "source_stride": 1000
+    },
+    "dataloader": {
+      "num_workers": 0,
+      "persistent_workers": false,
+      "pin_memory": false,
+      "prefetch_factor": null
+    },
+    "effective_epochs": 5,
+    "evaluation": {
+      "save_checkpoint": false,
+      "skip_posthoc_metrics": true,
+      "skip_test_evaluation": true
+    },
+    "filter_params_source": null,
+    "hardware": {
+      "cuda_available": false,
+      "cuda_device_name": null,
+      "device": "cpu"
+    },
+    "is_protocol_run": false,
+    "max_slices": 80,
+    "output_dir": "/home/pz1004/Workspaces/npx-xarvis/results/paper/dvsgesture/proposed_pol__tune_0/seed_0__20260523_001011_729868",
+    "run_purpose": "tuning_stage_b",
+    "run_timestamp": "20260523_001011_729868",
+    "sample_caps": {
+      "test": 1024,
+      "train": 4096,
+      "val": 1024
+    },
+    "software_versions": {
+      "matplotlib": "3.10.9",
+      "numpy": "1.26.4",
+      "pandas": "3.0.3",
+      "platform": "Linux-6.8.0-117-generic-x86_64-with-glibc2.35",
+      "python": "3.12.13",
+      "scikit-learn": "1.8.0",
+      "seaborn": "0.13.2",
+      "snntorch": "0.9.4",
+      "tonic": "1.6.0",
+      "torch": "2.12.0+cpu"
+    }
+  },
+  "run_timestamp": "20260523_001011_729868",
+  "seed": 0,
+  "sops": 0,
+  "stage1": {
+    "bypassed": true,
+    "calibration_stats": {},
+    "low_light_bias": {},
+    "manifest_name": "default",
+    "mode": "offline_noop",
+    "nominal_bias": {}
+  },
+  "t_max": 80,
+  "test_accuracy": null,
+  "time_bin_us": 150000,
+  "val_accuracy": 0.18518518518518517
+}

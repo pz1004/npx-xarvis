@@ -1,0 +1,170 @@
+{
+  "dataset": "dvsgesture",
+  "elapsed_sec": 33743.99,
+  "event_metrics_summary": {
+    "mean_auc": 0.5350182623107772,
+    "mean_ekr": 0.03226719529678424,
+    "mean_esr": 0.07446736113800358
+  },
+  "grid_preset": "fast",
+  "method": "proposed_pol",
+  "run_timestamp": "20260523_001011_729868",
+  "selected": {
+    "end_to_end_latency_sec": null,
+    "filter_params": {
+      "alpha": 0.01,
+      "delta_t_us": 5000,
+      "eps_us": 1,
+      "gamma": 1,
+      "k0": 1,
+      "k_high": 2,
+      "r_max_hz": 20000.0,
+      "t_recover_us": 1000000,
+      "tau_pair_us": 1000,
+      "tau_ref_dig_us": 500,
+      "u_hot": 32,
+      "warmup_us": 5000
+    },
+    "mean_auc": 0.5247173523290974,
+    "mean_ekr": 0.021802360277433763,
+    "mean_esr": 0.05156500382378344,
+    "rank": 2,
+    "test_accuracy": null,
+    "val_accuracy": 0.1851851862889749
+  },
+  "stage_b_lightweight": true,
+  "stage_b_results": [
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 5000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32,
+        "warmup_us": 5000
+      },
+      "mean_auc": 0.5260946062928651,
+      "mean_ekr": 0.023240509598281278,
+      "mean_esr": 0.05515197721628138,
+      "rank": 0,
+      "test_accuracy": null,
+      "val_accuracy": 0.18518518518518517
+    },
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 5000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 3,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32,
+        "warmup_us": 5000
+      },
+      "mean_auc": 0.5260946062928651,
+      "mean_ekr": 0.023240509598281278,
+      "mean_esr": 0.05515197721628138,
+      "rank": 1,
+      "test_accuracy": null,
+      "val_accuracy": 0.18518518518518517
+    },
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 5000,
+        "eps_us": 1,
+        "gamma": 1,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32,
+        "warmup_us": 5000
+      },
+      "mean_auc": 0.5247173523290974,
+      "mean_ekr": 0.021802360277433763,
+      "mean_esr": 0.05156500382378344,
+      "rank": 2,
+      "test_accuracy": null,
+      "val_accuracy": 0.1851851862889749
+    }
+  ],
+  "stage_b_skipped": false,
+  "top_candidates": [
+    {
+      "candidate_index": 16,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 5000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32,
+        "warmup_us": 5000
+      },
+      "mean_auc": 0.5260946062928651,
+      "mean_ekr": 0.023240509598281278,
+      "mean_esr": 0.05515197721628138
+    },
+    {
+      "candidate_index": 17,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 5000,
+        "eps_us": 1,
+        "gamma": 0,
+        "k0": 1,
+        "k_high": 3,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32,
+        "warmup_us": 5000
+      },
+      "mean_auc": 0.5260946062928651,
+      "mean_ekr": 0.023240509598281278,
+      "mean_esr": 0.05515197721628138
+    },
+    {
+      "candidate_index": 18,
+      "filter_params": {
+        "alpha": 0.01,
+        "delta_t_us": 5000,
+        "eps_us": 1,
+        "gamma": 1,
+        "k0": 1,
+        "k_high": 2,
+        "r_max_hz": 20000.0,
+        "t_recover_us": 1000000,
+        "tau_pair_us": 1000,
+        "tau_ref_dig_us": 500,
+        "u_hot": 32,
+        "warmup_us": 5000
+      },
+      "mean_auc": 0.5247173523290974,
+      "mean_ekr": 0.021802360277433763,
+      "mean_esr": 0.05156500382378344
+    }
+  ]
+}

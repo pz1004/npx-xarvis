@@ -1,0 +1,8 @@
+{
+  "dataset": "dvsgesture",
+  "max_slices": 300,
+  "split_seed": 2027,
+  "t_max": 300,
+  "time_bin_us": 40000,
+  "train_count": 969
+}

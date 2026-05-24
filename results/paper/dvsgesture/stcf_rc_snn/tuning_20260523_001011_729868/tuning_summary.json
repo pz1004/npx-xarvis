@@ -1,0 +1,93 @@
+{
+  "dataset": "dvsgesture",
+  "elapsed_sec": 25932.26,
+  "event_metrics_summary": {
+    "mean_auc": 0.5016545622748794,
+    "mean_ekr": 0.9980620304743448,
+    "mean_esr": 0.9992733120412852
+  },
+  "grid_preset": "fast",
+  "method": "stcf_rc_snn",
+  "run_timestamp": "20260523_001011_729868",
+  "selected": {
+    "end_to_end_latency_sec": null,
+    "filter_params": {
+      "delta_t_us": 5000
+    },
+    "mean_auc": 0.5035436991179242,
+    "mean_ekr": 0.9953203426674009,
+    "mean_esr": 0.9979964763194539,
+    "rank": 2,
+    "test_accuracy": null,
+    "val_accuracy": 0.11111111138705854
+  },
+  "stage_b_lightweight": true,
+  "stage_b_results": [
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "delta_t_us": 1000
+      },
+      "mean_auc": 0.5365673285334666,
+      "mean_ekr": 0.9311383882537484,
+      "mean_esr": 0.9630825588870453,
+      "rank": 0,
+      "test_accuracy": null,
+      "val_accuracy": 0.0740740743500215
+    },
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "delta_t_us": 2000
+      },
+      "mean_auc": 0.5172821273522102,
+      "mean_ekr": 0.9732742753500739,
+      "mean_esr": 0.9874010598801777,
+      "rank": 1,
+      "test_accuracy": null,
+      "val_accuracy": 0.0740740743500215
+    },
+    {
+      "end_to_end_latency_sec": null,
+      "filter_params": {
+        "delta_t_us": 5000
+      },
+      "mean_auc": 0.5035436991179242,
+      "mean_ekr": 0.9953203426674009,
+      "mean_esr": 0.9979964763194539,
+      "rank": 2,
+      "test_accuracy": null,
+      "val_accuracy": 0.11111111138705854
+    }
+  ],
+  "stage_b_skipped": false,
+  "top_candidates": [
+    {
+      "candidate_index": 0,
+      "filter_params": {
+        "delta_t_us": 1000
+      },
+      "mean_auc": 0.5365673285334666,
+      "mean_ekr": 0.9311383882537484,
+      "mean_esr": 0.9630825588870453
+    },
+    {
+      "candidate_index": 1,
+      "filter_params": {
+        "delta_t_us": 2000
+      },
+      "mean_auc": 0.5172821273522102,
+      "mean_ekr": 0.9732742753500739,
+      "mean_esr": 0.9874010598801777
+    },
+    {
+      "candidate_index": 2,
+      "filter_params": {
+        "delta_t_us": 5000
+      },
+      "mean_auc": 0.5035436991179242,
+      "mean_ekr": 0.9953203426674009,
+      "mean_esr": 0.9979964763194539
+    }
+  ]
+}
