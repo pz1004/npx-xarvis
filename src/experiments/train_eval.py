@@ -62,6 +62,7 @@ ROBUSTNESS_SOURCES = ("ba", "shot", "mixed")
 ROBUSTNESS_BASE_SEED = 100_000
 DENSE_INPUT_BUDGET_CHANNELS = 4
 FLOAT32_BYTES = 4
+DEFAULT_CPU_DENSE_BATCH_BYTES = 64 * 1024 * 1024
 DEFAULT_CUDA_DENSE_BATCH_BYTES = 256 * 1024 * 1024
 
 
@@ -91,6 +92,23 @@ def _cap_batch_size_for_dense_input(
     sample_bytes = _dense_sample_bytes(sensor_size=sensor_size, t_max=t_max)
     max_by_input = max(1, max_batch_bytes // max(sample_bytes, 1))
     return min(configured_batch_size, int(max_by_input))
+
+
+def _dense_batch_budget_bytes(training_config: dict[str, Any], device: torch.device) -> int:
+    shared_budget = training_config.get("max_dense_batch_bytes")
+    if device.type == "cuda":
+        return int(
+            training_config.get(
+                "max_cuda_dense_batch_bytes",
+                shared_budget if shared_budget is not None else DEFAULT_CUDA_DENSE_BATCH_BYTES,
+            )
+        )
+    return int(
+        training_config.get(
+            "max_cpu_dense_batch_bytes",
+            shared_budget if shared_budget is not None else DEFAULT_CPU_DENSE_BATCH_BYTES,
+        )
+    )
 
 
 def _build_scheduler(optimizer: torch.optim.Optimizer, total_epochs: int, warmup_epochs: int):
@@ -807,35 +825,34 @@ def run_training_experiment(
     )
 
     configured_batch_size = int(dataset_config["batch_size"])
-    batch_size = configured_batch_size
-    cuda_dense_batch_budget = None
-    if device.type == "cuda":
-        cuda_dense_batch_budget = int(
-            training_config.get("max_cuda_dense_batch_bytes", DEFAULT_CUDA_DENSE_BATCH_BYTES)
-        )
-        batch_size = _cap_batch_size_for_dense_input(
-            configured_batch_size=configured_batch_size,
+    dense_batch_budget = _dense_batch_budget_bytes(training_config, device)
+    batch_size = _cap_batch_size_for_dense_input(
+        configured_batch_size=configured_batch_size,
+        sensor_size=bundle.metadata.sensor_size,
+        t_max=bundle.slicing.t_max,
+        max_batch_bytes=dense_batch_budget,
+    )
+    if batch_size < configured_batch_size:
+        sample_bytes = _dense_sample_bytes(
             sensor_size=bundle.metadata.sensor_size,
             t_max=bundle.slicing.t_max,
-            max_batch_bytes=cuda_dense_batch_budget,
         )
-        if batch_size < configured_batch_size:
-            sample_bytes = _dense_sample_bytes(
-                sensor_size=bundle.metadata.sensor_size,
-                t_max=bundle.slicing.t_max,
-            )
-            LOGGER.info(
-                "Adjusted CUDA batch_size from %d to %d for dense input budget "
-                "(sample=%.1f MiB budget=%.1f MiB)",
-                configured_batch_size,
-                batch_size,
-                sample_bytes / float(1024**2),
-                cuda_dense_batch_budget / float(1024**2),
-            )
+        LOGGER.info(
+            "Adjusted %s batch_size from %d to %d for dense input budget "
+            "(sample=%.1f MiB budget=%.1f MiB)",
+            device.type,
+            configured_batch_size,
+            batch_size,
+            sample_bytes / float(1024**2),
+            dense_batch_budget / float(1024**2),
+        )
     run_metadata["batch_size"] = {
         "configured": configured_batch_size,
         "effective": batch_size,
-        "cuda_dense_batch_budget_bytes": cuda_dense_batch_budget,
+        "dense_batch_budget_bytes": dense_batch_budget,
+        "dense_batch_budget_device": device.type,
+        "cuda_dense_batch_budget_bytes": dense_batch_budget if device.type == "cuda" else None,
+        "cpu_dense_batch_budget_bytes": dense_batch_budget if device.type == "cpu" else None,
         "dense_input_budget_channels": DENSE_INPUT_BUDGET_CHANNELS,
     }
     epochs = int(epochs_override or dataset_config["epochs"])

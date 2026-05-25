@@ -179,6 +179,33 @@ echo "Methods   : ${SELECTED_METHODS[*]}"
 echo "Seeds     : ${SELECTED_SEEDS[*]}"
 echo "Extra args: ${EXTRA_ARGS[*]:-<none>}"
 
+if [[ "${FORCE_CPU:-0}" != "1" && "${ALLOW_CPU_FALLBACK:-0}" != "1" && -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  if ! "${PYTHON_BIN}" - <<'PY'
+import sys
+
+try:
+    import torch
+except Exception as exc:
+    print(f"ERROR: failed to import torch from {sys.executable}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+if not torch.cuda.is_available():
+    print(f"ERROR: CUDA_VISIBLE_DEVICES is set, but {sys.executable} cannot use CUDA.", file=sys.stderr)
+    print(
+        f"       torch={getattr(torch, '__version__', 'unknown')} "
+        f"cuda_runtime={getattr(torch.version, 'cuda', None)}",
+        file=sys.stderr,
+    )
+    print("       Use a CUDA-enabled Python/PyTorch, or set FORCE_CPU=1/ALLOW_CPU_FALLBACK=1.", file=sys.stderr)
+    sys.exit(1)
+
+print(f"CUDA preflight: torch={torch.__version__} device={torch.cuda.get_device_name()}", file=sys.stderr)
+PY
+  then
+    exit 2
+  fi
+fi
+
 for method in "${SELECTED_METHODS[@]}"; do
   validate_method "${method}"
 done

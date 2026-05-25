@@ -21,7 +21,12 @@ from src.data.event_io import EVENT_T, normalize_events
 from src.data.noise_injection import generate_shot_noise, inject_ba_noise, inject_mixed_noise, inject_shot_noise
 from src.data.slicing import output_events_to_event_tensor, raw_events_to_frame_tensor, select_time_bin_us
 from src.filters.metrics import evaluate_filter_predictions, event_structural_ratio, state_memory_bytes
-from src.experiments.train_eval import _build_scheduler, _cap_batch_size_for_dense_input, _dense_sample_bytes
+from src.experiments.train_eval import (
+    _build_scheduler,
+    _cap_batch_size_for_dense_input,
+    _dense_batch_budget_bytes,
+    _dense_sample_bytes,
+)
 
 
 def _clean_events() -> np.ndarray:
@@ -100,6 +105,15 @@ def test_dense_batch_cap_keeps_large_snn_inputs_within_budget() -> None:
         )
         == 128
     )
+
+
+def test_dense_batch_budget_is_device_aware() -> None:
+    assert _dense_batch_budget_bytes({}, torch.device("cpu")) == 64 * 1024 * 1024
+    assert _dense_batch_budget_bytes({}, torch.device("cuda")) == 256 * 1024 * 1024
+    assert _dense_batch_budget_bytes({"max_dense_batch_bytes": 123}, torch.device("cpu")) == 123
+    assert _dense_batch_budget_bytes({"max_dense_batch_bytes": 123}, torch.device("cuda")) == 123
+    assert _dense_batch_budget_bytes({"max_cpu_dense_batch_bytes": 456}, torch.device("cpu")) == 456
+    assert _dense_batch_budget_bytes({"max_cuda_dense_batch_bytes": 789}, torch.device("cuda")) == 789
 
 
 def test_vectorized_raw_tensorizer_accumulates_duplicates_and_ignores_late_events() -> None:
